@@ -27,7 +27,7 @@ export async function generateStrategyReport(
     const p = t.price, i1 = calcIndicators(c1h), id = calcIndicators(c1d);
     const m1 = ch(o?.["1m"]), m5 = ch(o?.["5m"]), m15 = ch(o?.["15m"]);
     if (!i1 || !id) { a.push({ symbol: sym, regime: "数据不足", score: 0, trend: "neutral", strength: "weak", keyLevels: "", summary: "数据不足", analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: "", analysis_1d: "" }); continue; }
-    const ax = id.adx, reg = ax > 25 ? "trend" : (ax >= 18 ? "weak_trend" : "range");
+    const ax = id.adx, reg = ax > 30 ? "trend" : (ax >= 22 ? "weak_trend" : "range");
     let rl = "", sig: S = "hold", sc = 0, re = "", cf = 0;
     const at = i1.atr14 / p * 100;
     // 趋势
@@ -48,8 +48,8 @@ export async function generateStrategyReport(
       rl = "震荡";
       const rs = i1.rsi14;
       const bp = ((p - i1.bbLower) / (i1.bbUpper - i1.bbLower) * 100);
-      if (rs < 40 && bp < 20 && !es.has(sym)) { sc = 5; sig = "buy"; re = `布林低${bp.toFixed(0)}%/RSI${rs.toFixed(0)} 超卖`; cf = 0.7; }
-      else if (rs > 60 && bp > 80 && !es.has(sym)) { sc = -5; sig = "sell"; re = `布林高${bp.toFixed(0)}%/RSI${rs.toFixed(0)} 超买`; cf = 0.7; }
+      if (rs < 30 && bp < 15 && !es.has(sym)) { sc = 5; sig = "buy"; re = `布林低${bp.toFixed(0)}%/RSI${rs.toFixed(0)} 超卖`; cf = 0.7; }
+      else if (rs > 70 && bp > 85 && !es.has(sym)) { sc = -5; sig = "sell"; re = `布林高${bp.toFixed(0)}%/RSI${rs.toFixed(0)} 超买`; cf = 0.7; }
       else re = `RSI${rs.toFixed(0)} 布林${bp.toFixed(0)}% 等待边界`;
     }
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;

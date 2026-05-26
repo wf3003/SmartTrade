@@ -174,8 +174,8 @@ export function checkStopLoss(
   currentPnlPct: number,
   peakPnlPct: number
 ): StopLossResult | null {
-  // 统一止损：无论是否曾盈利，亏损 ≥ -4% 就平仓
-  if (currentPnlPct <= -4) {
+  // 统一止损：亏损 ≥ -8%（6x杠杆下价格约反向1.3%）就平仓
+  if (currentPnlPct <= -8) {
     return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损` };
   }
   return null;

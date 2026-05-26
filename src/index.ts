@@ -37,6 +37,8 @@ const partialCloseMap = new Map<string, number>();
 const newPositionTime = new Map<string, number>();
 // 止损平仓后冷却时间（防连续触发）
 const stopCooldown = new Map<string, number>();
+// 止损后暂停该币种交易的最小分钟数
+const STOP_COOLDOWN_MINUTES = 30;
 
 async function main() {
   logger.info("=".repeat(50));
@@ -181,11 +183,11 @@ async function monitorPositions() {
         }
       }
 
-      // 止损检查：新开仓用宽止损 -10%，正常 -4%
+      // 止损检查：新开仓用宽止损 -15%，正常 -8%
       if (stopCooldown.has(pos.symbol) && Date.now() - (stopCooldown.get(pos.symbol)||0) < 10000) continue; // 10秒冷却
-      const stopThreshold = isNewPosition ? -10 : -4;
+      const stopThreshold = isNewPosition ? -15 : -8;
       const stopLossCheck = isNewPosition
-        ? (pnlPct <= -10 ? { shouldClose: true, level: "stop_loss", description: `新仓亏损${pnlPct.toFixed(1)}% 触发宽止损` } : null)
+        ? (pnlPct <= -15 ? { shouldClose: true, level: "stop_loss", description: `新仓亏损${pnlPct.toFixed(1)}% 触发宽止损` } : null)
         : checkStopLoss(pnlPct, peakPnl);
       if (stopLossCheck?.shouldClose) {
         logger.warn(`🛑 ${stopLossCheck.description} | ${pos.symbol}`);
@@ -399,6 +401,13 @@ async function aiDecisionCycle() {
         }
         if (existingSymbols.has(trade.symbol)) { logger.info(`已有 ${trade.symbol} 持仓，跳过`); continue; }
         if (existingSymbols.size >= CONFIG.maxPositions) { logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
+        // 止损冷却检查：该币种刚被止损，暂停指定分钟数
+        if (stopCooldown.has(trade.symbol) && Date.now() - (stopCooldown.get(trade.symbol)||0) < STOP_COOLDOWN_MINUTES * 60000) {
+          const mins = Math.ceil((STOP_COOLDOWN_MINUTES * 60000 - (Date.now() - (stopCooldown.get(trade.symbol)||0))) / 60000);
+          logger.info(`⏸️ ${trade.symbol} 止损冷却中，${mins}分钟后恢复`);
+          execLog.push(`cooldown:${trade.symbol}`);
+          continue;
+        }
 
         logger.warn(`🤖 AI 开仓: ${trade.action} ${trade.symbol} | ${trade.leverage}x | ${trade.amountPercent}%`);
         logger.info(`   理由: ${trade.reason}`);
