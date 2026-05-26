@@ -63,7 +63,7 @@ export async function generateStrategyReport(
                   : Math.abs(sc) >= 5 ? CONFIG.defaultLeverage * 2
                   : CONFIG.defaultLeverage)
       );
-      nt.push({ action: sig, symbol: sym, leverage: dynLeverage, amountPercent: 10, reason: re, confidence: cf, stopLossPct: 4, takeProfitPct: 8 });
+      nt.push({ action: sig, symbol: sym, leverage: dynLeverage, amountPercent: 5, reason: re, confidence: cf, stopLossPct: 4, takeProfitPct: 8 });
     }
   }
 
