@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><body>
+<h1>Minimal Test</h1>
+<button onclick="test()">Click to test</button>
+<div id="output">not run</div>
+<script>
+async function test() {
+  try {
+    const r = await fetch("/api/status");
+    const d = await r.json();
+    let html = "API OK: account $" + d.account.totalEquity.toFixed(2) + "<br>decisions: " + d.recentDecisions.length;
+    if (d.fullReport) html += "<br>analysis coins: " + d.fullReport.analysis.length;
+    document.getElementById("output").innerHTML = html;
+    console.log("Test OK", d);
+  } catch(e) {
+    document.getElementById("output").innerHTML = "ERROR: " + e.message + "<br>" + e.stack;
+    console.error(e);
+  }
+}
+test();
+</script>
+</body></html>

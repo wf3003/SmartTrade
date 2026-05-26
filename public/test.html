@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><body>
+<h1>QuantMax 测试页面</h1>
+<div id="test-output">加载中...</div>
+<script>
+async function test() {
+  try {
+    const resp = await fetch("/api/status");
+    const data = await resp.json();
+    document.getElementById("test-output").innerHTML = 
+      "API: " + (data.ok ? "✅" : "❌") +
+      " | 账户: $" + data.account.totalEquity.toFixed(2) +
+      " | 决策数: " + (data.recentDecisions || []).length +
+      " | 分析币种: " + (data.fullReport?.analysis?.length || 0) +
+      " | 首个: " + JSON.stringify((data.fullReport?.analysis || [])[0] || {});
+  } catch(e) {
+    document.getElementById("test-output").innerHTML = "❌ 错误: " + e.message;
+  }
+}
+test();
+</script>
+</body></html>

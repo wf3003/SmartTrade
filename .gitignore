@@ -1,0 +1,7 @@
+node_modules/
+data/quantmax.db
+data/quantmax.db-wal
+data/quantmax.db-shm
+.env
+*.log
+dist/

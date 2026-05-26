@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuantMax</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px;font-size:18px}
+h1{color:#58a6ff;font-size:26px;margin-bottom:8px}
+h2{color:#8b949e;font-weight:400;font-size:18px;margin-bottom:16px}
+h3{color:#58a6ff;font-size:20px;margin:20px 0 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:20px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:18px}
+.card h4{color:#58a6ff;font-size:16px;margin-bottom:10px}
+.stat{display:flex;justify-content:space-between;padding:5px 0;font-size:17px;border-bottom:1px solid #21262d}
+.stat:last-child{border-bottom:none}
+.label{color:#8b949e}
+.value{font-weight:600}
+.green{color:#3fb950}
+.red{color:#f85149}
+.yellow{color:#d2991d}
+.badge{display:inline-block;padding:4px 12px;border-radius:12px;font-size:14px;font-weight:600}
+.long-badge{background:#3a1a1a;color:#f85149}
+.short-badge{background:#1a3a1a;color:#3fb950}
+.hold-badge{background:#1a1a2e;color:#8b949e}
+.close-badge{background:#2d1b00;color:#d2991d}
+@keyframes ticker-scroll{0%{transform:translateX(0)}100%{transform:translateX(-33.333%)}}
+table{width:100%;border-collapse:collapse;font-size:16px}
+th{text-align:left;padding:10px 12px;color:#8b949e;border-bottom:1px solid #30363d;font-weight:600;font-size:15px}
+td{padding:10px 12px;border-bottom:1px solid #21262d}
+.num{text-align:right}
+.summary-box{background:#161b22;border:1px solid #d2991d;border-radius:8px;padding:14px 18px;margin:12px 0}
+#error-box{background:#3a1a1a;border:1px solid #f85149;border-radius:8px;padding:14px;margin:10px 0;display:none}
+</style>
+</head>
+<body>
+<h1>QuantMax</h1>
+<h2>AI/OKX/Gate/Binance</h2>
+<div id="ticker" style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 12px;margin-bottom:12px;overflow:hidden;height:36px;position:relative">
+  <div id="ticker-inner" style="white-space:nowrap;position:absolute;animation:none;font-size:14px;color:#8b949e;line-height:20px"></div>
+</div>
+<div id="error-box"></div>
+<div class="grid" id="cards"></div>
+<h3>实时持仓 <span id="ts"></span></h3>
+<table style="font-size:15px"><thead><tr><th class="num">时间</th><th>币种</th><th>方向</th><th class="num">杠杆</th><th class="num">开仓价</th><th class="num">标记价</th><th class="num">数量</th><th class="num">盈亏$</th><th class="num">盈亏%</th><th class="num">保证金</th></tr></thead><tbody id="pos-table"></tbody></table>
+<h3>AI 分析 <span id="cycle"></span></h3>
+<table><thead><tr><th>币种</th><th>趋势</th><th class="num">评分</th><th>1分</th><th>5分</th><th>15分</th><th>1时</th><th>1日</th><th>关键位</th></tr></thead><tbody id="ana-table"></tbody></table>
+<div id="summary-box" class="summary-box"></div>
+<h3>AI 决策</h3>
+<table><thead><tr><th>时间</th><th>币种</th><th>操作</th><th class="num">杠杆</th><th class="num">仓位%</th><th class="num">置信度</th><th>状态</th><th>原因</th></tr></thead><tbody id="dec-table"></tbody></table>
+<h3>交易记录 <span id="trade-count"></span></h3>
+<table style="font-size:15px"><thead><tr><th class="num">#</th><th class="num">时间</th><th>币种</th><th>方向</th><th class="num">杠杆</th><th class="num">开仓价</th><th class="num">数量</th><th class="num">价值</th><th class="num">保证金</th><th class="num">盈亏$</th><th class="num">盈亏%</th></tr></thead><tbody id="trade-table"></tbody></table>
+<div id="history-area" style="margin-top:20px">
+  <button onclick="toggleHistory()" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:15px">📊 历史复盘</button>
+  <div id="history-panel" style="display:none;margin-top:12px">
+    <div id="history-loading" style="color:#8b949e;padding:10px">加载中...</div>
+    <div id="history-content"></div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const sa = (n,d) => Number(n||0).toFixed(d);
+const sc = v => v>=0?"green":"red";
+const dt = s => { const d=new Date(s); return isNaN(d.getTime())? (s||"").slice(11,19) : d.toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}); };
+const dd = s => { const d=new Date(s); return isNaN(d.getTime())? (s||"").slice(0,10) : d.toLocaleDateString("zh-CN",{month:"2-digit",day:"2-digit"}); };
+const stLabel={pending:"待执行",success:"✅成功",failed:"❌失败",skipped:"⏭️跳过"};
+const stColor={success:"#3fb950",failed:"#f85149",pending:"#8b949e",skipped:"#d2991d"};
+const lastPrice={};
+const lb={buy:"做多",sell:"做空",hold:"观望",close:"平仓","close_partial":"部分平仓"};
+
+async function toggleHistory(){
+  const p=$("history-panel");
+  if(p.style.display==="block"){p.style.display="none";return}
+  p.style.display="block";
+  $("history-loading").style.display="block";
+  $("history-content").innerHTML="";
+  try{
+    const r=await fetch("/api/history?days=7");
+    const d=await r.json();
+    $("history-loading").style.display="none";
+    let html="";
+    // 统计摘要
+    const st=d.stats||{};
+    const wr=st.winRate||0;
+    const wrColor=wr>=50?"#3fb950":wr>0?"#d2991d":"#f85149";
+    html+=`<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 18px;margin:0 0 14px">`;
+    html+=`<h4 style="color:#58a6ff;margin:0 0 10px">📊 胜率统计 (近7天)</h4>`;
+    html+=`<div style="display:flex;flex-wrap:wrap;gap:12px;font-size:15px">`;
+    html+=`<span>总交易: <b>${st.totalClosed||0}</b> 平仓 + <b>${st.totalOpen||0}</b> 持仓中</span>`;
+    html+=`<span style="color:${wrColor}">胜率: <b>${sa(wr,1)}%</b> (${st.wins||0}胜/${st.losses||0}负)</span>`;
+    html+=`<span style="color:${(st.totalPnl||0)>=0?"#3fb950":"#f85149"}">总盈亏: ${(st.totalPnl||0)>=0?"+":""}$${sa(st.totalPnl||0,2)}</span>`;
+    html+=`<span style="color:#3fb950">最大盈利: +$${sa(st.maxWin||0,2)}</span>`;
+    html+=`<span style="color:#f85149">最大亏损: -$${sa(Math.abs(st.maxLoss||0),2)}</span>`;
+    html+=`</div>`;
+    // 按币种胜率
+    const bs=st.bySymbol||{};
+    const syms=Object.keys(bs);
+    if(syms.length){
+      html+=`<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;font-size:14px">`;
+      for(const sym of syms){
+        const s=bs[sym];
+        const swr=s.wins+s.losses>0?(s.wins/(s.wins+s.losses)*100):0;
+        const sc=s.pnl>=0?"#3fb950":"#f85149";
+        html+=`<span style="background:#21262d;border-radius:4px;padding:3px 8px">${sym} <b style="color:${sc}">${sa(swr,0)}%</b> (${s.wins}胜/${s.losses}负) <span style="color:${sc}">${s.pnl>=0?"+":""}$${sa(s.pnl,2)}</span></span>`;
+      }
+      html+=`</div>`;
+    }
+    html+=`</div>`;
+    // 决策记录
+    const decs=d.decisions||[];
+    html+='<h4 style="color:#58a6ff;margin:16px 0 10px">🤖 决策记录 ('+decs.length+'条)</h4>';
+    if(decs.length){
+      html+='<table style="font-size:14px"><thead><tr><th>日期</th><th>时间</th><th>币种</th><th>操作</th><th class="num">杠杆</th><th class="num">置信度</th><th>状态</th><th>原因</th></tr></thead><tbody>';
+      for(const dec of decs){
+        const a=dec.action||"hold";
+        const bc=a==="buy"?"long-badge":a==="sell"?"short-badge":a==="close"||a==="close_partial"?"close-badge":"hold-badge";
+        const s=dec.status||"pending";
+        html+=`<tr><td>${new Date(dec.time).toLocaleDateString("zh-CN",{month:"2-digit",day:"2-digit"})}</td><td>${dt(dec.time)}</td><td><b>${dec.symbol||"-"}</b></td><td><span class="badge ${bc}" style="font-size:12px">${lb[a]||a}</span></td><td class="num">${dec.leverage||"-"}x</td><td class="num">${sa((dec.confidence||0)*100,0)}%</td><td style="color:${stColor[s]};font-weight:600">${stLabel[s]}</td><td style="word-break:break-word;max-width:260px;font-size:13px;line-height:1.4">${dec.reason||""}</td></tr>`;
+      }
+      html+='</tbody></table>';
+    }
+    $("history-content").innerHTML=html;
+  }catch(e){
+    $("history-loading").innerHTML='<span style="color:#f85149">加载失败: '+e.message+'</span>';
+  }
+}
+
+async function refresh(){
+  try{
+    const r=await fetch("/api/status");
+    const d=await r.json();
+    if(!d.ok) return;
+    $("error-box").style.display="none";
+
+    // 币价滚动条
+    const tickers = d.tickers || {};
+    let tickerHtml = "";
+    for (const [sym, price] of Object.entries(tickers)) {
+      const p = Number(price||0);
+      const symShort = sym.replace("/USDT","");
+      const color = p > 0 ? (p >= (lastPrice[sym]||p) ? "#3fb950" : "#f85149") : "#8b949e";
+      lastPrice[sym] = p;
+      tickerHtml += `<span style="margin-right:28px"><b style="color:#c9d1d9">${symShort}</b> <span style="color:${color}">$${Number.isInteger(p)?p.toFixed(0):p>1?p.toFixed(2):p.toFixed(4)}</span></span>`;
+    }
+    // 拼接 3 倍以支持连续滚动
+    const tEl = $("ticker-inner");
+    tEl.innerHTML = tickerHtml + " 　　" + tickerHtml + " 　　" + tickerHtml;
+    tEl.style.animation = "ticker-scroll 40s linear infinite";
+
+    // cards
+    const a=d.account||{};
+    const ib=d.config.initialBalance||5000;
+    const pnl=a.totalEquity-ib;
+    const pnlPct=ib>0?((a.totalEquity-ib)/ib*100):0;
+    const pnlColor=pnl>=0?"green":"red";
+    $("cards").innerHTML=
+      `<div class="card"><h4>账户</h4>`+
+      `<div class="stat"><span class="label">初始资金</span><span class="value">$${sa(ib,2)}</span></div>`+
+      `<div class="stat"><span class="label">净值</span><span class="value">$${sa(a.totalEquity,2)}</span></div>`+
+      `<div class="stat"><span class="label">可用</span><span class="value">$${sa(a.availableBalance,2)}</span></div>`+
+      `<div class="stat"><span class="label">未实现盈亏</span><span class="value ${sc(a.unrealizedPnl)}">$${sa(a.unrealizedPnl,2)}</span></div>`+
+      `<div class="stat"><span class="label">已用保证金</span><span class="value">$${sa(a.marginUsed,2)}</span></div>`+
+      `<div class="stat"><span class="label">盈亏值</span><span class="value ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}</span></div>`+
+      `<div class="stat"><span class="label">盈亏率</span><span class="value ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</span></div></div>`+
+      `<div class="card"><h4>配置</h4>`+
+      `<div class="stat"><span class="label">最大杠杆</span><span class="value">${d.config.maxLeverage}x</span></div>`+
+      `<div class="stat"><span class="label">最大持仓数</span><span class="value">${d.config.maxPositions}</span></div>`+
+      `<div class="stat"><span class="label">AI 模型</span><span class="value">${d.config.model}</span></div>`+
+      `<div class="stat"><span class="label">止损</span><span class="value red">$${d.config.stopLossUsdt}</span></div>`+
+      `<div class="stat"><span class="label">部分止盈 1</span><span class="value">${d.config.partialTP.stage1.trigger}→${d.config.partialTP.stage1.closePercent}%</span></div></div>`+
+      `<div class="card"><h4>风控</h4>`+
+      `<div class="stat"><span class="label">持仓数</span><span class="value ${(d.positions||[]).length>=d.config.maxPositions?"yellow":"green"}">${(d.positions||[]).length}/${d.config.maxPositions}</span></div>`+
+      `<div class="stat"><span class="label">部分止盈 2</span><span class="value">${d.config.partialTP.stage2.trigger}→${d.config.partialTP.stage2.closePercent}%</span></div>`+
+      `<div class="stat"><span class="label">部分止盈 3</span><span class="value">${d.config.partialTP.stage3.trigger}→${d.config.partialTP.stage3.closePercent}%</span></div></div>`;
+
+    // positions
+    const pos=d.positions||[];
+    if(pos.length===0){
+      $("pos-table").innerHTML='<tr><td class="num" colspan="10" style="color:#8b949e;padding:20px;text-align:center">无持仓</td></tr>';
+    }else{
+      $("pos-table").innerHTML=pos.map(p=>{
+        const c=sc(p.unrealizedPnl);
+        const sideLabel = p.side==="long"?"做多":"做空";
+        const t = d.recentTrades?.find(function(x){return x.symbol===p.symbol && x.status==="open";});
+        const et = t?dt(t.entry_time):"-";
+        return `<tr><td class="num" style="color:#8b949e;font-size:13px">${et}</td><td><b>${p.symbol}</b></td><td><span class="badge ${p.side==="long"?"long-badge":"short-badge"}">${sideLabel}</span></td><td class="num">${p.leverage}x</td><td class="num">$${sa(p.entryPrice,4)}</td><td class="num">$${sa(p.markPrice,4)}</td><td class="num">${p.qty||0}</td><td class="num ${c}">$${sa(p.unrealizedPnl,2)}</td><td class="num ${c}">${sa(p.unrealizedPnlPct,2)}%</td><td class="num">$${sa(p.margin,2)}</td></tr>`;
+      }).join("");
+    }
+
+    // analysis
+    const ana=(d.fullReport||{}).analysis||[];
+    if(ana.length===0){
+      $("ana-table").innerHTML='<tr><td colspan="9" style="text-align:center;color:#8b949e;padding:20px">等待分析...</td></tr>';
+    }else{
+      const trendLabel={bullish:"看涨",bearish:"看跌",neutral:"震荡"};
+      const strengthLabel={strong:"强",moderate:"中",weak:"弱"};
+      $("ana-table").innerHTML=ana.map(a=>{
+        const cs=a.score>3?"green":a.score<-3?"red":"yellow";
+        return `<tr><td><b>${a.symbol}</b></td><td class="${cs}" style="min-width:90px;white-space:nowrap">${trendLabel[a.trend]||"?"} ${strengthLabel[a.strength]||a.strength||"?"}</td><td class="num ${cs}"><b>${a.score>=0?"+":""}${a.score}</b></td><td>${a.analysis_1m||"-"}</td><td>${a.analysis_5m||"-"}</td><td>${a.analysis_15m||"-"}</td><td>${a.analysis_1h||"-"}</td><td>${a.analysis_1d||"-"}</td><td style="color:#d2991d">${a.keyLevels||"-"}</td></tr>`;
+      }).join("");
+    }
+
+    // summary
+    const sm=(d.fullReport||{}).summary||"";
+    const exe=(d.fullReport||{}).execution||{};
+    const logs=(exe.log||[]);
+    if(sm){
+      let html='<div style="color:#d2991d;font-weight:600;font-size:16px;margin-bottom:6px">最终决策</div><div style="color:#3fb950;font-size:15px;line-height:1.5">'+sm+'</div>';
+      if(logs.length){
+        html+='<div style="margin-top:8px;border-top:1px solid #30363d;padding-top:6px;font-size:13px;line-height:1.5">';
+        for(const l of logs) html+=`<div style="color:#8b949e">${l}</div>`;
+        html+='</div>';
+      }
+      $("summary-box").innerHTML=html;
+      $("summary-box").style.display="block";
+    }else{$("summary-box").style.display="none"}
+
+    // decisions
+    const decs=d.recentDecisions||[];
+    if(decs.length===0){
+      $("dec-table").innerHTML='<tr><td colspan="8" style="text-align:center;color:#8b949e;padding:20px">暂无决策</td></tr>';
+    }else{
+      $("dec-table").innerHTML=decs.slice(0,20).map(dd=>{
+        const a=dd.action||"hold";
+        const bc=a==="buy"?"long-badge":a==="sell"?"short-badge":a==="close"||a==="close_partial"?"close-badge":"hold-badge";
+        const s = dd.status||"pending";
+        return `<tr><td>${dt(dd.time)}</td><td>${dd.symbol||"-"}</td><td><span class="badge ${bc}">${lb[a]||a}</span></td><td class="num">${dd.leverage||"-"}x</td><td class="num">${dd.amount||"-"}%</td><td class="num">${sa((dd.confidence||0)*100,0)}%</td><td style="color:${stColor[s]};font-weight:600">${stLabel[s]}</td><td style="word-break:break-word;max-width:260px;font-size:14px;line-height:1.4">${dd.reason||""}</td></tr>`;
+      }).join("");
+    }
+
+    // trades
+    const ts=d.recentTrades||[];
+    $("trade-count").textContent="("+ts.length+"笔)";
+    if(ts.length===0){
+      $("trade-table").innerHTML='<tr><td class="num" colspan="11" style="color:#8b949e;padding:20px;text-align:center">暂无交易</td></tr>';
+    }else{
+      $("trade-table").innerHTML=ts.map((t,i)=>{
+        const isClosed=t.status==="closed";
+        const side=isClosed?"平仓":(t.side==="long"?"做多":"做空");
+        const dirColor=isClosed?"#d2991d":(t.side==="long"?"#f85149":"#3fb950");
+        const val=t.notional||0;
+        const mg=t.margin||0;
+        const qtyDisplay = t.entry_qty > 100 ? Math.round(t.entry_qty) : t.entry_qty;
+        const pnl=isClosed?(t.pnl||0):0;
+        const pnlPct=isClosed?(t.pnl_pct||0):0;
+        const pnlColor=pnl>=0?"green":"red";
+        return `<tr><td class="num" style="color:#8b949e">${i+1}</td><td class="num">${dt(t.entry_time)}</td><td><b>${t.symbol}</b></td><td style="color:${dirColor}">${side}</td><td class="num">${t.leverage}x</td><td class="num">$${sa(t.entry_price,4)}</td><td class="num">${qtyDisplay}</td><td class="num">$${sa(val,2)}</td><td class="num">$${sa(mg,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</td></tr>`;
+      }).join("");
+    }
+
+    $("ts").textContent=new Date().toLocaleTimeString();
+    if(d.cycle) $("cycle").textContent="#"+d.cycle.number+(d.cycle.time?" | "+new Date(d.cycle.time).toLocaleTimeString():"");
+  }catch(e){
+    $("error-box").style.display="block";
+    $("error-box").innerHTML='<b style="color:#f85149">Error: </b>'+e.message+'<br><pre style="color:#8b949e;font-size:12px;margin-top:4px">'+e.stack+'</pre>';
+  }
+}
+refresh();
+setInterval(refresh,8000);
+</script>
+</body>
+</html>
