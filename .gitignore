@@ -5,3 +5,4 @@ data/quantmax.db-shm
 .env
 *.log
 dist/
+.deepseek/
