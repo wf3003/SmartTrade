@@ -174,15 +174,10 @@ export function checkStopLoss(
   currentPnlPct: number,
   peakPnlPct: number
 ): StopLossResult | null {
-  if (peakPnlPct <= 0) {
-    // 从未盈利：固定止损（收紧至 -4%，避免滑点过大）
-    if (currentPnlPct <= -4) {
-      return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损` };
-    }
-    return null;
+  // 统一止损：无论是否曾盈利，亏损 ≥ -4% 就平仓
+  if (currentPnlPct <= -4) {
+    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损` };
   }
-
-  // 有盈利：不在这里处理跟踪止盈（由监控循环的分批止盈+跟踪止盈逻辑接管）
   return null;
 }
 
