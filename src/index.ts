@@ -168,7 +168,6 @@ async function monitorPositions() {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 从峰值${peakPnl.toFixed(1)}%回撤至${pnlPct.toFixed(1)}% (>=5%), 平仓${pos.qty}张`);
           try {
             const closeResult = await exchangeManager.closePosition(pos.symbol, pos.side, pos.qty);
-            stopCooldown.set(pos.symbol, Date.now());
             peakPnlMap.delete(key);
             partialCloseMap.delete(pos.symbol);
             closedThisCycle.add(pos.symbol);
