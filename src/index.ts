@@ -46,6 +46,8 @@ const STOP_COOLDOWN_MINUTES = 30;
 const STARTUP_COOLDOWN_CYCLES = 3;
 // 每周期最多开 N 个新仓（按置信度排序后取头部）
 const MAX_NEW_PER_CYCLE = 2;
+// 本地已开仓集合（防 exchange.getPositions 延迟导致持仓上限失效）
+const openedThisSession = new Set<string>();
 
 async function main() {
   logger.info("=".repeat(50));
@@ -181,6 +183,7 @@ async function monitorPositions() {
             logger.info(`💰 部分止盈: ${pos.symbol} ${closeQty}张 利润$${partialPnl.toFixed(2)} (累计${newPct}%)`);
             if (newPct >= 100) {
               closedThisCycle.add(pos.symbol);
+              openedThisSession.delete(pos.symbol);
               const closeFee = closeResult.fee || 0;
               closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
                 pos.unrealizedPnl || 0, pnlPct, closeFee, "partial_tp");
@@ -200,6 +203,7 @@ async function monitorPositions() {
             peakPnlMap.delete(key);
             partialCloseMap.delete(pos.symbol);
             closedThisCycle.add(pos.symbol);
+            openedThisSession.delete(pos.symbol);
             if (dbTrade) {
               const exitPx = closeResult.avgPrice || currentPrice;
               const closeFee = closeResult.fee || 0;
@@ -227,6 +231,7 @@ async function monitorPositions() {
           peakPnlMap.delete(key);
           partialCloseMap.delete(pos.symbol);
           closedThisCycle.add(pos.symbol);
+          openedThisSession.delete(pos.symbol);
           if (dbTrade) {
             const closeFee = closeResult.fee || 0;
             closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
@@ -424,7 +429,10 @@ async function aiDecisionCycle() {
           updateDecisionStatus(skipId, "skipped");
         }
       } else {
-      const existingSymbols = new Set(positions.map(p => p.symbol));
+      const existingSymbols = new Set([
+        ...positions.map(p => p.symbol),
+        ...openedThisSession,
+      ]);
       let openedThisCycle = 0;
       for (const trade of report.newTrades) {
         if (openedThisCycle >= MAX_NEW_PER_CYCLE) { logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
@@ -491,6 +499,7 @@ async function aiDecisionCycle() {
           });
           logger.warn(`✅ 开仓: ${trade.symbol} ${side} ${qty}张 @$${fillPrice} ${trade.leverage}x`);
           existingSymbols.add(trade.symbol);
+          openedThisSession.add(trade.symbol);
           openedThisCycle++;
           newPositionTime.set(trade.symbol, Date.now());
           // 逐笔延迟，避免 demo 环境瞬时并发触发限频
