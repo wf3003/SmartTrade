@@ -39,30 +39,48 @@ export async function generateStrategyReport(
     // 缓存 1h ATR% 供监控循环的止损用
     const at = i1.atr14 / p * 100;
     setAtrCache(sym, at / 100); // 存为小数（如 0.015 = 1.5%）
-    const ax = id.adx, reg = ax > 30 ? "trend" : (ax >= 22 ? "weak_trend" : "range");
+    // ===== 日线方向过滤 + EMA50 回调入场 =====
+    const dailyUp = id.ema20 > id.ema50;
+    const dailyAdx = id.adx;
+    const ema50 = i1.ema50;
+    const ema50Dist = (p - ema50) / ema50 * 100;
     let rl = "", sig: S = "hold", sc = 0, re = "", cf = 0;
-    // 趋势
-    if (reg === "trend") {
-      const up = i1.ema20 > i1.ema50, dn = i1.ema20 < i1.ema50;
-      rl = up ? "多头趋势" : "空头趋势";
-      if (up && p > i1.ema20 && at < 3 && !es.has(sym)) { sc = 6 + Math.round(at * 10); sig = "buy"; re = `趋势多头/EMA20>EMA50/价格均线上方`; cf = Math.min(0.85, 0.6 + at * 8); }
-      else if (dn && p < i1.ema20 && at < 3 && !es.has(sym)) { sc = -6 - Math.round(at * 10); sig = "sell"; re = `趋势空头/EMA20<EMA50/价格均线下方`; cf = Math.min(0.85, 0.6 + at * 8); }
-      else re = "趋势明确,等待回调";
-    } else if (reg === "weak_trend") {
-      const up = i1.ema20 > i1.ema50, dn = i1.ema20 < i1.ema50;
-      rl = up ? "弱多头" : "弱空头";
-      if (up && at < 2 && !es.has(sym)) { sc = 4; sig = "buy"; re = "弱趋势偏多/波动收敛"; cf = 0.65; }
-      else if (dn && at < 2 && !es.has(sym)) { sc = -4; sig = "sell"; re = "弱趋势偏空/波动收敛"; cf = 0.65; }
-      else re = "弱趋势,等待信号";
+
+    if (dailyAdx < 25) {
+      rl = "日线震荡";
+      re = `日线ADX${dailyAdx.toFixed(0)}<25 不交易`;
+    } else if (dailyUp && !es.has(sym)) {
+      rl = "日线多头";
+      if (ema50Dist >= -0.5 && ema50Dist <= 0.3) {
+        sc = 8 + Math.round(at * 5);
+        sig = "buy";
+        re = `日线多/回踩EMA50(${ema50Dist.toFixed(2)}%)`;
+        cf = 0.8;
+      } else if (ema50Dist > 0.3) {
+        re = "日线多/等待回调";
+      } else {
+        re = "日线多/跌破均线观望";
+      }
+    } else if (!dailyUp && !es.has(sym)) {
+      rl = "日线空头";
+      if (ema50Dist >= -0.3 && ema50Dist <= 0.5) {
+        sc = -8 - Math.round(at * 5);
+        sig = "sell";
+        re = `日线空/反弹EMA50(${ema50Dist.toFixed(2)}%)`;
+        cf = 0.8;
+      } else if (ema50Dist < -0.3) {
+        re = "日线空/等待反弹";
+      } else {
+        re = "日线空/突破均线观望";
+      }
     } else {
-      // 震荡市（ADX < 22）不开趋势单
-      rl = "震荡";
-      re = `ADX${ax.toFixed(0)} 震荡市不开仓`;
+      rl = dailyUp ? "日线多头" : "日线空头";
+      re = "已有持仓或等信号";
     }
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
-    const td = reg === "trend" ? (i1.ema20 > i1.ema50 ? "均线多头排列" : "均线空头排列")
-      : reg === "weak_trend" ? (i1.ema20 > i1.ema50 ? "均线偏多" : "均线偏空")
-      : "震荡市不开仓";
+    const td = dailyAdx >= 25
+      ? (dailyUp ? `日均线多/回踩1hEma50` : `日均线空/反弹1hEma50`)
+      : "日线震荡不开仓";
     a.push({ symbol: sym, regime: rl, score: sc, trend: sig === "buy" ? "bullish" : sig === "sell" ? "bearish" : "neutral", strength: Math.abs(sc) >= 7 ? "strong" : Math.abs(sc) >= 4 ? "moderate" : "weak", keyLevels: kl, summary: re, analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: adxDesc(id.adx) });
     if (sig !== "hold") {
       const dynLeverage = Math.min(CONFIG.maxLeverage,
