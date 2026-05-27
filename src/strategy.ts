@@ -39,11 +39,14 @@ export async function generateStrategyReport(
     // 缓存 1h ATR% 供监控循环的止损用
     const at = i1.atr14 / p * 100;
     setAtrCache(sym, at / 100); // 存为小数（如 0.015 = 1.5%）
-    // ===== 日线方向过滤 + EMA50 回调入场 =====
+    // ===== 日线方向过滤 + 动态回调入场 =====
     const dailyUp = id.ema20 > id.ema50;
     const dailyAdx = id.adx;
-    const ema50 = i1.ema50;
-    const ema50Dist = (p - ema50) / ema50 * 100;
+    // 强趋势(ADX>50)用EMA20，普通趋势用EMA50，确保价格有机会触到
+    const entryMa = dailyAdx > 50 ? i1.ema20 : i1.ema50;
+    const entryMaName = dailyAdx > 50 ? "EMA20" : "EMA50";
+    const maDist = (p - entryMa) / entryMa * 100;
+    const entryBand = Math.max(at * 0.6, 0.5);
     let rl = "", sig: S = "hold", sc = 0, re = "", cf = 0;
 
     if (dailyAdx < 25) {
@@ -51,27 +54,27 @@ export async function generateStrategyReport(
       re = `日线ADX${dailyAdx.toFixed(0)}<25 不交易`;
     } else if (dailyUp && !es.has(sym)) {
       rl = "日线多头";
-      if (ema50Dist >= -0.5 && ema50Dist <= 0.3) {
+      if (maDist >= -entryBand && maDist <= entryBand * 0.6) {
         sc = 8 + Math.round(at * 5);
         sig = "buy";
-        re = `日线多/回踩EMA50(${ema50Dist.toFixed(2)}%)`;
+        re = `日线多/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
         cf = 0.8;
-      } else if (ema50Dist > 0.3) {
-        re = "日线多/等待回调";
+      } else if (maDist > entryBand * 0.6) {
+        re = `日线多/离${entryMaName}${maDist.toFixed(1)}%等回调`;
       } else {
-        re = "日线多/跌破均线观望";
+        re = `日线多/跌破${entryMaName}观望`;
       }
     } else if (!dailyUp && !es.has(sym)) {
       rl = "日线空头";
-      if (ema50Dist >= -0.3 && ema50Dist <= 0.5) {
+      if (maDist >= -entryBand * 0.6 && maDist <= entryBand) {
         sc = -8 - Math.round(at * 5);
         sig = "sell";
-        re = `日线空/反弹EMA50(${ema50Dist.toFixed(2)}%)`;
+        re = `日线空/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
         cf = 0.8;
-      } else if (ema50Dist < -0.3) {
-        re = "日线空/等待反弹";
+      } else if (maDist < -entryBand * 0.6) {
+        re = `日线空/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等反弹`;
       } else {
-        re = "日线空/突破均线观望";
+        re = `日线空/突破${entryMaName}观望`;
       }
     } else {
       rl = dailyUp ? "日线多头" : "日线空头";
@@ -79,7 +82,7 @@ export async function generateStrategyReport(
     }
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
     const td = dailyAdx >= 25
-      ? (dailyUp ? `日均线多/回踩1hEma50` : `日均线空/反弹1hEma50`)
+      ? `日${dailyUp?"多":"空"}/回踩1h${entryMaName}`
       : "日线震荡不开仓";
     a.push({ symbol: sym, regime: rl, score: sc, trend: sig === "buy" ? "bullish" : sig === "sell" ? "bearish" : "neutral", strength: Math.abs(sc) >= 7 ? "strong" : Math.abs(sc) >= 4 ? "moderate" : "weak", keyLevels: kl, summary: re, analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: adxDesc(id.adx) });
     if (sig !== "hold") {
