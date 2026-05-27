@@ -15,7 +15,8 @@ import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache } from "./state";
 import { 
   db, 
-  getOpenPositions, 
+  getOpenPositions,
+  getLatestOpenTrades, 
   getDecisionsToday, 
   insertDecision, 
   updateDecisionStatus,
@@ -145,8 +146,8 @@ async function monitorPositions() {
         ? pos.entryPrice * (1 + pnlPct / 100 / pos.leverage) 
         : 0;
 
-      // 分批止盈检查
-      const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === pos.symbol);
+      // 分批止盈检查（取最新 open 记录，防旧记录污染）
+      const dbTrade = getLatestOpenTrades().get(pos.symbol);
       // 用本地 Map 追踪已平比例，避免 DB 读写延迟导致重复平仓
       const alreadyClosed = partialCloseMap.get(pos.symbol) || 0;
 

@@ -93,6 +93,19 @@ export function getOpenPositions() {
   return db.prepare("SELECT * FROM trades WHERE status = 'open' AND (close_type IS NULL OR close_type = '')").all();
 }
 
+/** 获取每个币种最新的 open 记录（防重复 open 导致峰值写错行） */
+export function getLatestOpenTrades(): Map<string, any> {
+  const rows = db.prepare(`
+    SELECT * FROM trades 
+    WHERE status='open' AND id IN (
+      SELECT MAX(id) FROM trades WHERE status='open' GROUP BY symbol
+    )
+  `).all() as any[];
+  const map = new Map<string, any>();
+  for (const r of rows) map.set(r.symbol, r);
+  return map;
+}
+
 export function getTradesToday() {
   const today = new Date().toISOString().slice(0, 10);
   return db.prepare("SELECT * FROM trades WHERE entry_time >= ?").all(today);
