@@ -41,6 +41,8 @@ const newPositionTime = new Map<string, number>();
 const stopCooldown = new Map<string, number>();
 // 止损后暂停该币种交易的最小分钟数
 const STOP_COOLDOWN_MINUTES = 30;
+// 启动后等待 N 个周期再开新仓（让账户数据和 ATR 缓存稳定）
+const STARTUP_COOLDOWN_CYCLES = 3;
 
 async function main() {
   logger.info("=".repeat(50));
@@ -391,7 +393,16 @@ async function aiDecisionCycle() {
 
     // 6. 开新仓
     const execLog: string[] = [];
-    if (report.newTrades && report.newTrades.length > 0) {
+
+    // 启动保护：前 N 个周期不开新仓，让数据稳定
+    if (aiCycleNumber <= STARTUP_COOLDOWN_CYCLES) {
+      logger.info(`⏸️ 启动保护: 第${aiCycleNumber}周期不开新仓 (需等待${STARTUP_COOLDOWN_CYCLES}个周期)`);
+      execLog.push("启动保护中，跳过开仓");
+    }
+
+    if (aiCycleNumber <= STARTUP_COOLDOWN_CYCLES) {
+      // 跳过开仓，但持仓指令照常执行
+    } else if (report.newTrades && report.newTrades.length > 0) {
       const actionable = report.newTrades.filter(t => t.action !== "hold");
       if (actionable.length === 0) {
         logger.info(`📋 本轮决策无开仓 (${report.newTrades.length}条均为hold)`);
