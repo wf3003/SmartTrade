@@ -181,12 +181,9 @@ async function monitorPositions() {
             logger.info(`💰 部分止盈: ${pos.symbol} ${closeQty}张 利润$${partialPnl.toFixed(2)} (累计${newPct}%)`);
             if (newPct >= 100) {
               closedThisCycle.add(pos.symbol);
-              const actualPnl = closeResult.avgPrice > 0
-                ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * pos.qty
-                : (pos.unrealizedPnl || pnlPct / 100 * pos.margin);
               const closeFee = closeResult.fee || 0;
               closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
-                actualPnl, pnlPct, closeFee, "partial_tp");
+                pos.unrealizedPnl || 0, pnlPct, closeFee, "partial_tp");
             }
           }
         } catch (e: any) {
@@ -231,13 +228,9 @@ async function monitorPositions() {
           partialCloseMap.delete(pos.symbol);
           closedThisCycle.add(pos.symbol);
           if (dbTrade) {
-            const actualPnl = closeResult.avgPrice > 0
-              ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * pos.qty
-              : (pos.unrealizedPnl || pnlPct / 100 * pos.margin);
-            const actualPnlPct = pos.margin > 0 ? (actualPnl / pos.margin * 100) : pnlPct;
             const closeFee = closeResult.fee || 0;
             closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
-              actualPnl, actualPnlPct, closeFee, stopLossCheck.level);
+              pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, closeFee, stopLossCheck.level);
           }
         } catch (e: any) {
           logger.error(`止损平仓失败 ${pos.symbol}: ${e.message}`);
