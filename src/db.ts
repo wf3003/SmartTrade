@@ -223,11 +223,16 @@ export function insertSnapshot(s: {
   `).run(s.time, s.total_equity, s.unrealized_pnl, s.realized_pnl_day, s.margin_used, s.open_positions);
 }
 
-/** 加载所有未平仓持仓的峰值 PnL（重启恢复用） */
+/** 加载未平仓持仓的峰值 PnL（重启恢复用，每币种只取最新一条） */
 export function getOpenPositionPeakPnlMap(): Map<string, { tradeId: number; peakPnl: number }> {
-  const rows = db.prepare(
-    "SELECT id, symbol, peak_pnl_pct FROM trades WHERE status='open' AND peak_pnl_pct > 0"
-  ).all() as any[];
+  // 只取每个币种最新的一条 open 记录（防止旧仓位的峰值污染新仓位）
+  const rows = db.prepare(`
+    SELECT t.id, t.symbol, t.peak_pnl_pct FROM trades t
+    INNER JOIN (
+      SELECT symbol, MAX(id) AS max_id FROM trades WHERE status='open' GROUP BY symbol
+    ) latest ON t.id = latest.max_id
+    WHERE t.status='open' AND t.peak_pnl_pct > 0
+  `).all() as any[];
   const map = new Map<string, { tradeId: number; peakPnl: number }>();
   for (const r of rows) {
     map.set(r.symbol, { tradeId: r.id, peakPnl: r.peak_pnl_pct });
