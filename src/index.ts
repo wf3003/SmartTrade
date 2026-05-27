@@ -362,6 +362,7 @@ async function aiDecisionCycle() {
             updateDecisionStatus(decId, "success");
             logger.warn(`  ✅ AI 平仓: ${posCmd.symbol}`);
             peakPnlMap.delete(posCmd.symbol);
+            openedThisSession.delete(posCmd.symbol);
             if (dbTrade) closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close");
           } catch (e: any) {
             updateDecisionStatus(decId, "failed");
@@ -382,7 +383,10 @@ async function aiDecisionCycle() {
               updatePartialClose(dbTrade.id, newPct, qty, partialPnl);
               logger.info(`💰 AI部分止盈: ${posCmd.symbol} ${qty}张 利润$${partialPnl.toFixed(2)} (累计${newPct}%)`);
               partialCloseMap.delete(posCmd.symbol);
-              if (newPct >= 100) closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close_partial");
+              if (newPct >= 100) {
+                openedThisSession.delete(posCmd.symbol);
+                closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close_partial");
+              }
             }
           } catch (e: any) {
             updateDecisionStatus(decId, "failed");
