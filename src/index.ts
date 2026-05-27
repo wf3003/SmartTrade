@@ -363,6 +363,9 @@ async function aiDecisionCycle() {
             logger.warn(`  ✅ AI 平仓: ${posCmd.symbol}`);
             peakPnlMap.delete(posCmd.symbol);
             openedThisSession.delete(posCmd.symbol);
+            if (posCmd.reason.includes("离场")) {
+              stopCooldown.set(posCmd.symbol, Date.now());
+            }
             if (dbTrade) closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close");
           } catch (e: any) {
             updateDecisionStatus(decId, "failed");
