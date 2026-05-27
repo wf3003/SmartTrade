@@ -1,6 +1,7 @@
 import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
 import { calcIndicators } from "./indicators";
+import { setAtrCache } from "./state";
 
 type S = "buy" | "sell" | "hold";
 
@@ -27,9 +28,11 @@ export async function generateStrategyReport(
     const p = t.price, i1 = calcIndicators(c1h), id = calcIndicators(c1d);
     const m1 = ch(o?.["1m"]), m5 = ch(o?.["5m"]), m15 = ch(o?.["15m"]);
     if (!i1 || !id) { a.push({ symbol: sym, regime: "数据不足", score: 0, trend: "neutral", strength: "weak", keyLevels: "", summary: "数据不足", analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: "", analysis_1d: "" }); continue; }
+    // 缓存 1h ATR% 供监控循环的止损用
+    const at = i1.atr14 / p * 100;
+    setAtrCache(sym, at / 100); // 存为小数（如 0.015 = 1.5%）
     const ax = id.adx, reg = ax > 30 ? "trend" : (ax >= 22 ? "weak_trend" : "range");
     let rl = "", sig: S = "hold", sc = 0, re = "", cf = 0;
-    const at = i1.atr14 / p * 100;
     // 趋势
     if (reg === "trend") {
       const up = i1.ema20 > i1.ema50, dn = i1.ema20 < i1.ema50;
@@ -44,13 +47,9 @@ export async function generateStrategyReport(
       else if (dn && at < 2 && !es.has(sym)) { sc = -4; sig = "sell"; re = "弱趋势偏空/波动收敛"; cf = 0.65; }
       else re = "弱趋势,等待信号";
     } else {
-      // 震荡：RSI + 布林带位置
+      // 震荡市（ADX < 22）不开趋势单
       rl = "震荡";
-      const rs = i1.rsi14;
-      const bp = ((p - i1.bbLower) / (i1.bbUpper - i1.bbLower) * 100);
-      if (rs < 30 && bp < 15 && !es.has(sym)) { sc = 5; sig = "buy"; re = `布林低${bp.toFixed(0)}%/RSI${rs.toFixed(0)} 超卖`; cf = 0.7; }
-      else if (rs > 70 && bp > 85 && !es.has(sym)) { sc = -5; sig = "sell"; re = `布林高${bp.toFixed(0)}%/RSI${rs.toFixed(0)} 超买`; cf = 0.7; }
-      else re = `RSI${rs.toFixed(0)} 布林${bp.toFixed(0)}% 等待边界`;
+      re = `ADX${ax.toFixed(0)} 震荡市不开仓`;
     }
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
     const td = reg === "trend" ? (i1.ema20 > i1.ema50 ? "均线多头排列" : "均线空头排列")
@@ -59,8 +58,8 @@ export async function generateStrategyReport(
     a.push({ symbol: sym, regime: rl, score: sc, trend: sig === "buy" ? "bullish" : sig === "sell" ? "bearish" : "neutral", strength: Math.abs(sc) >= 7 ? "strong" : Math.abs(sc) >= 4 ? "moderate" : "weak", keyLevels: kl, summary: re, analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: `日线ADX${id.adx.toFixed(0)}` });
     if (sig !== "hold") {
       const dynLeverage = Math.min(CONFIG.maxLeverage,
-        Math.round(Math.abs(sc) >= 7 ? CONFIG.defaultLeverage * 3
-                  : Math.abs(sc) >= 5 ? CONFIG.defaultLeverage * 2
+        Math.round(Math.abs(sc) >= 7 ? CONFIG.defaultLeverage * 1.5
+                  : Math.abs(sc) >= 5 ? CONFIG.defaultLeverage * 1.2
                   : CONFIG.defaultLeverage)
       );
       nt.push({ action: sig, symbol: sym, leverage: dynLeverage, amountPercent: 5, reason: re, confidence: cf, stopLossPct: 4, takeProfitPct: 8 });

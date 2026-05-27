@@ -163,21 +163,20 @@ export interface StopLossResult {
 }
 
 /**
- * 检查是否触发止损
- * 规则: 
- *   - 盈利 >= 30%时，回撤到 20% 以下 → 平仓（锁利）
- *   - 盈利 >= 20%且 <30%时，回撤到 10% 以下 → 平仓
- *   - 盈利 >= 10%且 <20%时，回撤到 5% 以下 → 平仓
- *   - 盈利 < 10%时，回撤到 0%（即亏到入场价）→ 平仓
- *   - 亏损达到 -5% → 强制平仓
+ * 检查是否触发止损（ATR 动态止损）
+ * 止损距离 = 1.5 × ATR% × 杠杆，限制在 8%~15% 之间
+ * 低波动币种用 8% 兜底，高波动币种自动放宽
  */
 export function checkStopLoss(
   currentPnlPct: number,
-  peakPnlPct: number
+  peakPnlPct: number,
+  leverage: number = 5,
+  atrPct: number = 0.015
 ): StopLossResult | null {
-  // 统一止损：亏损 ≥ -8%（6x杠杆下价格约反向1.3%）就平仓
-  if (currentPnlPct <= -8) {
-    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损` };
+  const atrStopPct = Math.round(atrPct * 1.5 * leverage * 100 * 10) / 10;
+  const stopThreshold = Math.max(Math.min(atrStopPct, 15), 8);
+  if (currentPnlPct <= -stopThreshold) {
+    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × 1.5 × ${leverage}x = ${stopThreshold.toFixed(0)}%)` };
   }
   return null;
 }

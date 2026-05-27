@@ -12,7 +12,7 @@ import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
 import { checkAccountRisk, checkPartialTakeProfit, executePartialClose, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport } from "./state";
+import { setLatestReport, atrCache } from "./state";
 import { 
   db, 
   getOpenPositions, 
@@ -202,12 +202,12 @@ async function monitorPositions() {
         }
       }
 
-      // 止损检查：新开仓用宽止损 -15%，正常 -8%
+      // 止损检查：新开仓用宽止损 -15%，正常 ATR 动态止损
       if (stopCooldown.has(pos.symbol) && Date.now() - (stopCooldown.get(pos.symbol)||0) < 10000) continue; // 10秒冷却
-      const stopThreshold = isNewPosition ? -15 : -8;
+      const atrVal = atrCache.get(pos.symbol) || 0.015;
       const stopLossCheck = isNewPosition
         ? (pnlPct <= -15 ? { shouldClose: true, level: "stop_loss", description: `新仓亏损${pnlPct.toFixed(1)}% 触发宽止损` } : null)
-        : checkStopLoss(pnlPct, peakPnl);
+        : checkStopLoss(pnlPct, peakPnl, pos.leverage || 5, atrVal);
       if (stopLossCheck?.shouldClose) {
         logger.warn(`🛑 ${stopLossCheck.description} | ${pos.symbol}`);
         try {
