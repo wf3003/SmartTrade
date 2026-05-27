@@ -43,6 +43,8 @@ const stopCooldown = new Map<string, number>();
 const STOP_COOLDOWN_MINUTES = 30;
 // 启动后等待 N 个周期再开新仓（让账户数据和 ATR 缓存稳定）
 const STARTUP_COOLDOWN_CYCLES = 3;
+// 每周期最多开 N 个新仓（按置信度排序后取头部）
+const MAX_NEW_PER_CYCLE = 2;
 
 async function main() {
   logger.info("=".repeat(50));
@@ -402,8 +404,11 @@ async function aiDecisionCycle() {
 
     if (aiCycleNumber <= STARTUP_COOLDOWN_CYCLES) {
       // 跳过开仓，但持仓指令照常执行
+      let openedThisCycle = MAX_NEW_PER_CYCLE; // 直接跳过
     } else if (report.newTrades && report.newTrades.length > 0) {
-      const actionable = report.newTrades.filter(t => t.action !== "hold");
+      const actionable = report.newTrades
+        .filter(t => t.action !== "hold")
+        .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
       if (actionable.length === 0) {
         logger.info(`📋 本轮决策无开仓 (${report.newTrades.length}条均为hold)`);
         execLog.push("AI 全部观望，无开仓");
@@ -426,7 +431,9 @@ async function aiDecisionCycle() {
         }
       } else {
       const existingSymbols = new Set(positions.map(p => p.symbol));
+      let openedThisCycle = 0;
       for (const trade of report.newTrades) {
+        if (openedThisCycle >= MAX_NEW_PER_CYCLE) { logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
         if (trade.action === "hold") continue;
         if ((trade.confidence || 0) < 0.80) { 
           const msg = `⏭️ ${trade.symbol} 信心度${((trade.confidence||0)*100).toFixed(0)}% < 80% 跳过`;
@@ -490,6 +497,7 @@ async function aiDecisionCycle() {
           });
           logger.warn(`✅ 开仓: ${trade.symbol} ${side} ${qty}张 @$${fillPrice} ${trade.leverage}x`);
           existingSymbols.add(trade.symbol);
+          openedThisCycle++;
           newPositionTime.set(trade.symbol, Date.now());
           // 逐笔延迟，避免 demo 环境瞬时并发触发限频
           await new Promise(r => setTimeout(r, 1500));
