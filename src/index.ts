@@ -88,13 +88,21 @@ async function monitorPositions() {
     // 更新账户峰值（用于回辙检查）
     updatePeakEquity(account.totalEquity);
 
-    // 检查账户级止损
-    if (account.totalEquity <= MINIMUM_ACCOUNT_STOP_USDT) {
+    // 检查账户级止损（totalEquity=0 表示获取失败，跳过）
+    if (account.totalEquity > 0 && account.totalEquity <= MINIMUM_ACCOUNT_STOP_USDT) {
       logger.warn(`⚠️ 账户止损触发: 权益 $${account.totalEquity.toFixed(2)} ≤ $${MINIMUM_ACCOUNT_STOP_USDT}`);
       logger.warn(`   正在平掉所有 ${positions.length} 个持仓...`);
+      const openTrades = getOpenPositions() as any[];
       for (const p of positions) {
         try {
           await exchangeManager.closePosition(p.symbol, p.side, p.qty);
+          // 同步写 DB
+          const dbTrade = openTrades.find((t: any) => t.symbol === p.symbol);
+          if (dbTrade) {
+            closeTrade(dbTrade.id, 0, p.qty, p.unrealizedPnl || 0, p.unrealizedPnlPct || 0, 0, "account_stop");
+          }
+          peakPnlMap.delete(p.symbol);
+          partialCloseMap.delete(p.symbol);
           logger.warn(`  ✅ 已平仓: ${p.symbol}`);
         } catch (e: any) {
           logger.error(`  平仓失败 ${p.symbol}: ${e.message}`);
