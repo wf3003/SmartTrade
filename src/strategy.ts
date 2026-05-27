@@ -101,9 +101,9 @@ export async function generateStrategyReport(
     const o = ohlcv.get(pos.symbol); const c = o?.["1h"] ? ca(o["1h"]) : []; const i = calcIndicators(c);
     if (!i) { pc.push({ symbol: pos.symbol, action: "hold", reason: "数据不足", confidence: 0.5 }); continue; }
     let ac: "hold" | "close" = "hold", rr = "";
-    if (pos.side === "long" && t.price < i.ema50 * 0.997) { ac = "close"; rr = "跌穿EMA50(>0.3%)离场"; }
-    else if (pos.side === "short" && t.price > i.ema50 * 1.003) { ac = "close"; rr = "涨穿EMA50(>0.3%)离场"; }
-    else rr = "EMA50趋势完好";
+    if (pos.side === "long" && t.price < i.ema20 * 0.995) { ac = "close"; rr = "跌穿EMA20(>0.5%离场)"; }
+    else if (pos.side === "short" && t.price > i.ema20 * 1.005) { ac = "close"; rr = "涨穿EMA20(>0.5%离场)"; }
+    else rr = "EMA20趋势完好";
     pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
   }
   return { analysis: a, positions: pc, newTrades: nt, summary: `【策略周期】${a.length}币种 ${pc.filter(x=>x.action!=="hold").length}持仓指令 ${nt.length}交易信号` };
