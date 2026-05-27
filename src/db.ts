@@ -78,11 +78,14 @@ db.exec(`
   );
 `);
 
-// 迁移：添加 status 字段（旧数据库兼容）
+// 迁移：添加兼容字段
 try { db.exec("ALTER TABLE decisions ADD COLUMN status TEXT DEFAULT 'pending'"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN notional REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN margin REAL DEFAULT 0"); } catch {}
-
+try { db.exec("ALTER TABLE trades ADD COLUMN peak_pnl_pct REAL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_qty REAL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_pnl REAL DEFAULT 0"); } catch {}
 logger.info("数据库已连接: " + dbPath);
 
 // 查询工具函数
@@ -159,12 +162,12 @@ export function updateDecisionStatus(id: number | bigint, status: string) {
 export function insertTrade(t: {
   exchange: string; symbol: string; side: string; leverage: number;
   entry_price: number; entry_qty: number; entry_time: string; reason: string;
-  notional?: number; margin?: number;
+  notional?: number; margin?: number; entry_fee?: number;
 }) {
   return db.prepare(`
-    INSERT INTO trades (exchange, symbol, side, leverage, entry_price, entry_qty, entry_time, reason, status, notional, margin)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
-  `).run(t.exchange, t.symbol, t.side, t.leverage, t.entry_price, t.entry_qty, t.entry_time, t.reason, t.notional || 0, t.margin || 0);
+    INSERT INTO trades (exchange, symbol, side, leverage, entry_price, entry_qty, entry_time, reason, status, notional, margin, entry_fee)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+  `).run(t.exchange, t.symbol, t.side, t.leverage, t.entry_price, t.entry_qty, t.entry_time, t.reason, t.notional || 0, t.margin || 0, t.entry_fee || 0);
 }
 
 export function closeTrade(id: number, exitPrice: number, exitQty: number, pnl: number, pnlPct: number, fee: number, closeType: string) {
@@ -175,7 +178,12 @@ export function closeTrade(id: number, exitPrice: number, exitQty: number, pnl: 
   `).run(exitPrice, exitQty, now, pnl, pnlPct, fee, closeType, id);
 }
 
-export function updatePartialClose(id: number, pct: number) {
+export function updatePartialClose(id: number, pct: number, qty?: number, pnl?: number) {
+  if (qty !== undefined && pnl !== undefined) {
+    return db.prepare(
+      "UPDATE trades SET partial_close_pct = ?, partial_close_qty = IFNULL(partial_close_qty, 0) + ?, partial_close_pnl = IFNULL(partial_close_pnl, 0) + ? WHERE id = ?"
+    ).run(pct, qty, pnl, id);
+  }
   return db.prepare("UPDATE trades SET partial_close_pct = ? WHERE id = ?").run(pct, id);
 }
 
@@ -213,4 +221,21 @@ export function insertSnapshot(s: {
     INSERT INTO account_snapshots (time, total_equity, unrealized_pnl, realized_pnl_day, margin_used, open_positions)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(s.time, s.total_equity, s.unrealized_pnl, s.realized_pnl_day, s.margin_used, s.open_positions);
+}
+
+/** 加载所有未平仓持仓的峰值 PnL（重启恢复用） */
+export function getOpenPositionPeakPnlMap(): Map<string, { tradeId: number; peakPnl: number }> {
+  const rows = db.prepare(
+    "SELECT id, symbol, peak_pnl_pct FROM trades WHERE status='open' AND peak_pnl_pct > 0"
+  ).all() as any[];
+  const map = new Map<string, { tradeId: number; peakPnl: number }>();
+  for (const r of rows) {
+    map.set(r.symbol, { tradeId: r.id, peakPnl: r.peak_pnl_pct });
+  }
+  return map;
+}
+
+/** 保存峰值 PnL 到数据库（持久化，防止重启丢失） */
+export function updatePeakPnlInDb(id: number, peakPnlPct: number) {
+  return db.prepare("UPDATE trades SET peak_pnl_pct = ? WHERE id = ?").run(peakPnlPct, id);
 }

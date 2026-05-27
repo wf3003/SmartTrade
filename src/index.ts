@@ -22,7 +22,9 @@ import {
   insertTrade, 
   insertSnapshot,
   closeTrade,
-  updatePartialClose
+  updatePartialClose,
+  getOpenPositionPeakPnlMap,
+  updatePeakPnlInDb,
 } from "./db";
 
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓
@@ -49,6 +51,13 @@ async function main() {
 
   await exchangeManager.init();
   await startServer();
+
+  // 从数据库恢复已存峰值 PnL（进程重启后跟踪止盈不丢失）
+  const savedPeaks = getOpenPositionPeakPnlMap();
+  for (const [symbol, data] of savedPeaks) {
+    peakPnlMap.set(symbol, data.peakPnl);
+    logger.info(`📋 恢复峰值: ${symbol} peakPnl=${data.peakPnl.toFixed(1)}%`);
+  }
 
   // 监控循环（从交易所实时检查持仓）—— 串行防并发
   logger.info(`📡 持仓监控已启动 (每 ${MONITOR_INTERVAL / 1000}s)`);
@@ -124,17 +133,21 @@ async function monitorPositions() {
         ? pos.entryPrice * (1 + pnlPct / 100 / pos.leverage) 
         : 0;
 
-      // 记录峰值（首次遇到持仓时初始化）
-      const key = pos.symbol;
-      if (!peakPnlMap.has(key)) peakPnlMap.set(key, pnlPct);
-      const prevPeak = peakPnlMap.get(key)!;
-      if (pnlPct > prevPeak) peakPnlMap.set(key, pnlPct);
-      const peakPnl = peakPnlMap.get(key)!;
-
       // 分批止盈检查
       const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === pos.symbol);
       // 用本地 Map 追踪已平比例，避免 DB 读写延迟导致重复平仓
       const alreadyClosed = partialCloseMap.get(pos.symbol) || 0;
+
+      // 记录峰值（首次遇到持仓时初始化，持久化到 DB）
+      const key = pos.symbol;
+      if (!peakPnlMap.has(key)) peakPnlMap.set(key, pnlPct);
+      const prevPeak = peakPnlMap.get(key)!;
+      if (pnlPct > prevPeak) {
+        peakPnlMap.set(key, pnlPct);
+        // 持久化到 DB，进程重启后可以恢复
+        if (dbTrade?.id) updatePeakPnlInDb(dbTrade.id, pnlPct);
+      }
+      const peakPnl = peakPnlMap.get(key)!;
 
       const tpResult = checkPartialTakeProfit(0, pnlPct, alreadyClosed);
       if (tpResult?.shouldClose) {
@@ -147,14 +160,20 @@ async function monitorPositions() {
           const newPct = alreadyClosed + tpResult.closePercent;
           partialCloseMap.set(pos.symbol, newPct);
           if (dbTrade) {
-            (await import("./db")).updatePartialClose(dbTrade.id, newPct);
+            // 计算本次部分平仓的利润，存入 DB
+            const partialPnl = closeResult.avgPrice > 0
+              ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * closeQty
+              : (pnlPct / 100 * pos.margin * (closeQty / Math.max(pos.qty, 1)));
+            (await import("./db")).updatePartialClose(dbTrade.id, newPct, closeQty, partialPnl);
+            logger.info(`💰 部分止盈: ${pos.symbol} ${closeQty}张 利润$${partialPnl.toFixed(2)} (累计${newPct}%)`);
             if (newPct >= 100) {
               closedThisCycle.add(pos.symbol);
               const actualPnl = closeResult.avgPrice > 0
                 ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * pos.qty
                 : (pos.unrealizedPnl || pnlPct / 100 * pos.margin);
+              const closeFee = closeResult.fee || 0;
               closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
-                actualPnl, pnlPct, 0, "partial_tp");
+                actualPnl, pnlPct, closeFee, "partial_tp");
             }
           }
         } catch (e: any) {
@@ -162,8 +181,8 @@ async function monitorPositions() {
         }
       }
 
-      // 跟踪止盈：已触发分批止盈后，从峰值回撤5%则平仓剩余
-      if (alreadyClosed > 0 && peakPnl > 0 && (peakPnl - pnlPct) >= 5) {
+      // 跟踪止盈：盈利峰值 >=8% 后回撤 >=5% 则平仓（不再要求先触过分批止盈）
+      if (peakPnl >= 8 && pnlPct > 0 && (peakPnl - pnlPct) >= 5) {
         if (pos.qty > 0) {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 从峰值${peakPnl.toFixed(1)}%回撤至${pnlPct.toFixed(1)}% (>=5%), 平仓${pos.qty}张`);
           try {
@@ -173,7 +192,8 @@ async function monitorPositions() {
             closedThisCycle.add(pos.symbol);
             if (dbTrade) {
               const exitPx = closeResult.avgPrice || currentPrice;
-              closeTrade(dbTrade.id, exitPx, pos.qty, pos.unrealizedPnl || 0, pnlPct, 0, "trail_stop");
+              const closeFee = closeResult.fee || 0;
+              closeTrade(dbTrade.id, exitPx, pos.qty, pos.unrealizedPnl || 0, pnlPct, closeFee, "trail_stop");
             }
           } catch (e: any) {
             logger.error(`跟踪止盈失败 ${pos.symbol}: ${e.message}`);
@@ -202,8 +222,9 @@ async function monitorPositions() {
               ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * pos.qty
               : (pos.unrealizedPnl || pnlPct / 100 * pos.margin);
             const actualPnlPct = pos.margin > 0 ? (actualPnl / pos.margin * 100) : pnlPct;
+            const closeFee = closeResult.fee || 0;
             closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
-              actualPnl, actualPnlPct, 0, stopLossCheck.level);
+              actualPnl, actualPnlPct, closeFee, stopLossCheck.level);
           }
         } catch (e: any) {
           logger.error(`止损平仓失败 ${pos.symbol}: ${e.message}`);
@@ -339,12 +360,16 @@ async function aiDecisionCycle() {
           const clsPct = posCmd.closePercent || 50;
           const qty = Math.ceil(pos.qty * clsPct / 100);
           try {
-            await exchangeManager.closePosition(posCmd.symbol, pos.side, qty);
+            const closeResult = await exchangeManager.closePosition(posCmd.symbol, pos.side, qty);
             updateDecisionStatus(decId, "success");
             logger.warn(`  ✅ AI 部分平仓: ${posCmd.symbol} ${qty}张`);
             if (dbTrade) {
               const newPct = (dbTrade.partial_close_pct || 0) + clsPct;
-              updatePartialClose(dbTrade.id, newPct);
+              const partialPnl = closeResult.avgPrice > 0
+                ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * qty
+                : 0;
+              updatePartialClose(dbTrade.id, newPct, qty, partialPnl);
+              logger.info(`💰 AI部分止盈: ${posCmd.symbol} ${qty}张 利润$${partialPnl.toFixed(2)} (累计${newPct}%)`);
               partialCloseMap.delete(posCmd.symbol);
               if (newPct >= 100) closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close_partial");
             }
@@ -442,6 +467,7 @@ async function aiDecisionCycle() {
             leverage: trade.leverage, entry_price: fillPrice, entry_qty: qty,
             entry_time: new Date().toISOString(), reason: trade.reason,
             notional, margin: notional / trade.leverage,
+            entry_fee: openResult.fee || 0,
           });
           logger.warn(`✅ 开仓: ${trade.symbol} ${side} ${qty}张 @$${fillPrice} ${trade.leverage}x`);
           existingSymbols.add(trade.symbol);

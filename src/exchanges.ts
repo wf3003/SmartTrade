@@ -305,7 +305,7 @@ class ExchangeManager {
     return { totalEquity: 0, availableBalance: 0, unrealizedPnl: 0, marginUsed: 0, marginRatio: 0 };
   }
 
-  async openPosition(symbol: string, side: "long" | "short", qty: number, leverage: number): Promise<{ order: any; avgPrice: number }> {
+  async openPosition(symbol: string, side: "long" | "short", qty: number, leverage: number): Promise<{ order: any; avgPrice: number; fee: number }> {
     const found = this.findSwapClient(symbol);
     if (!found) throw new Error(`无可用的合约交易所: ${symbol}`);
     const { client, swapSymbol } = found;
@@ -346,7 +346,8 @@ class ExchangeManager {
         const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
         logger.info(`开仓成功: ${swapSymbol} ${side} ${qty}张 @${leverage}x`);
         const avgPrice = order?.price || order?.average || 0;
-        return { order, avgPrice };
+        const fee = order?.fee?.cost || 0;
+        return { order, avgPrice, fee };
       } catch (e: any) {
         lastError = e;
         let msg = e.message || String(e);
@@ -415,7 +416,7 @@ class ExchangeManager {
     return results.sort((a, b) => (a.time || "").localeCompare(b.time || ""));
   }
 
-  async closePosition(symbol: string, side: "long" | "short", qty: number): Promise<{ order: any; avgPrice: number }> {
+  async closePosition(symbol: string, side: "long" | "short", qty: number): Promise<{ order: any; avgPrice: number; fee: number }> {
     const found = this.findSwapClient(symbol);
     if (!found) throw new Error(`无可用的合约交易所: ${symbol}`);
     const { client, swapSymbol } = found;
@@ -427,12 +428,13 @@ class ExchangeManager {
     try {
       const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
       const avgPrice = order?.price || order?.average || 0;
-      return { order, avgPrice };
+      const fee = order?.fee?.cost || 0;
+      return { order, avgPrice, fee };
     } catch (e: any) {
       const msg = e.message || String(e);
       if (msg.includes("51169") || msg.includes("no position") || msg.includes("don't have any positions")) {
         logger.warn(`closePosition: ${symbol} 仓位已不存在（可能已被其他方式平仓）`);
-        return { order: null, avgPrice: 0 };
+        return { order: null, avgPrice: 0, fee: 0 };
       }
       throw e;
     }

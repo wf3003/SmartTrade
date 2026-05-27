@@ -115,7 +115,7 @@ export async function executePartialClose(
   if (closeQty <= 0) closeQty = Math.min(1, totalQty);
 
   try {
-    await exchangeManager.closePosition(symbol, side, closeQty);
+    const closeResult = await exchangeManager.closePosition(symbol, side, closeQty);
 
     const priceDiff = currentPrice - entryPrice;
     const dir = side === "long" ? 1 : -1;
@@ -127,11 +127,12 @@ export async function executePartialClose(
     // 更新数据库中的 partial_close_pct
     const current = (db.prepare("SELECT partial_close_pct FROM trades WHERE id = ?").get(positionId) as any)?.partial_close_pct || 0;
     const newPct = current + closePercent;
-    updatePartialClose(positionId, newPct);
+    updatePartialClose(positionId, newPct, closeQty, pnl);
 
     // 如果完全平仓（累计 100%），关闭记录
     if (newPct >= 100) {
-      closeTrade(positionId, currentPrice, totalQty, pnl, pnlPct, 0, "partial_tp");
+      const closeFee = closeResult.fee || 0;
+      closeTrade(positionId, currentPrice, totalQty, pnl, pnlPct, closeFee, "partial_tp");
     }
 
     return true;
