@@ -11,7 +11,15 @@ interface PCmd { symbol: string; action: S | "close" | "close_partial"; closePer
 export interface StrategyReport { analysis: CoinSignal[]; positions: PCmd[]; newTrades: TradeSignal[]; summary: string; execution?: { log: string[] }; }
 
 function ca(d: { open: number; high: number; low: number; close: number }[]): number[][] { return d.map(c => [0, 0, c.high, c.low, c.close, 0]); }
-function ch(d?: { open: number; high: number; low: number; close: number }[]): string { if (!d || d.length < 2) return ""; const p = ((d[d.length-1].close - d[0].close) / d[0].close * 100); return (p >= 0 ? "+" : "") + p.toFixed(2) + "%"; }
+function ch(d?: { open: number; high: number; low: number; close: number }[]): string { if (!d || d.length < 2) return ""; const p = ((d[d.length-1].close - d[0].close) / d[0].close * 100); return (p >= 0 ? "涨" : "跌") + Math.abs(p).toFixed(2) + "%"; }
+/** ADX → 中文趋势强度 */
+function adxDesc(adx: number): string {
+  if (adx >= 75) return `极强趋势(ADX${adx.toFixed(0)})`;
+  if (adx >= 50) return `强趋势(ADX${adx.toFixed(0)})`;
+  if (adx >= 30) return `趋势明确(ADX${adx.toFixed(0)})`;
+  if (adx >= 22) return `弱趋势(ADX${adx.toFixed(0)})`;
+  return `震荡(ADX${adx.toFixed(0)})`;
+}
 
 export async function generateStrategyReport(
   tickers: Map<string, MarketData>,
@@ -54,8 +62,8 @@ export async function generateStrategyReport(
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
     const td = reg === "trend" ? (i1.ema20 > i1.ema50 ? "均线多头排列" : "均线空头排列")
       : reg === "weak_trend" ? (i1.ema20 > i1.ema50 ? "均线偏多" : "均线偏空")
-      : `布林带/RSI${i1.rsi14.toFixed(0)}`;
-    a.push({ symbol: sym, regime: rl, score: sc, trend: sig === "buy" ? "bullish" : sig === "sell" ? "bearish" : "neutral", strength: Math.abs(sc) >= 7 ? "strong" : Math.abs(sc) >= 4 ? "moderate" : "weak", keyLevels: kl, summary: re, analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: `日线ADX${id.adx.toFixed(0)}` });
+      : "震荡市不开仓";
+    a.push({ symbol: sym, regime: rl, score: sc, trend: sig === "buy" ? "bullish" : sig === "sell" ? "bearish" : "neutral", strength: Math.abs(sc) >= 7 ? "strong" : Math.abs(sc) >= 4 ? "moderate" : "weak", keyLevels: kl, summary: re, analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: adxDesc(id.adx) });
     if (sig !== "hold") {
       const dynLeverage = Math.min(CONFIG.maxLeverage,
         Math.round(Math.abs(sc) >= 7 ? CONFIG.defaultLeverage * 1.5
