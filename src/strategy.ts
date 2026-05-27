@@ -5,7 +5,7 @@ import { setAtrCache } from "./state";
 
 type S = "buy" | "sell" | "hold";
 
-interface TradeSignal { action: S; symbol: string; leverage: number; amountPercent: number; reason: string; confidence: number; stopLossPct: number; takeProfitPct: number; }
+interface TradeSignal { action: S; symbol: string; leverage: number; amountPercent: number; reason: string; confidence: number; score: number; stopLossPct: number; takeProfitPct: number; }
 interface CoinSignal { symbol: string; regime: string; score: number; trend: string; strength: string; keyLevels: string; summary: string; analysis_1m: string; analysis_5m: string; analysis_15m: string; analysis_1h: string; analysis_1d: string; }
 interface PCmd { symbol: string; action: S | "close" | "close_partial"; closePercent?: number; reason: string; confidence: number; }
 export interface StrategyReport { analysis: CoinSignal[]; positions: PCmd[]; newTrades: TradeSignal[]; summary: string; execution?: { log: string[] }; }
@@ -70,7 +70,7 @@ export async function generateStrategyReport(
                   : Math.abs(sc) >= 5 ? CONFIG.defaultLeverage * 1.2
                   : CONFIG.defaultLeverage)
       );
-      nt.push({ action: sig, symbol: sym, leverage: dynLeverage, amountPercent: 5, reason: re, confidence: cf, stopLossPct: 4, takeProfitPct: 8 });
+      nt.push({ action: sig, symbol: sym, leverage: dynLeverage, amountPercent: 5, reason: re, confidence: cf, score: sc, stopLossPct: 4, takeProfitPct: 8 });
     }
   }
 

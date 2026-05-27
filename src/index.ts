@@ -402,7 +402,7 @@ async function aiDecisionCycle() {
     } else if (report.newTrades && report.newTrades.length > 0) {
       const actionable = report.newTrades
         .filter(t => t.action !== "hold")
-        .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+        .sort((a, b) => (Math.abs(b.score || 0)) - (Math.abs(a.score || 0)));
       if (actionable.length === 0) {
         logger.info(`📋 本轮决策无开仓 (${report.newTrades.length}条均为hold)`);
         execLog.push("AI 全部观望，无开仓");
