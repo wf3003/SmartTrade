@@ -302,13 +302,20 @@ async function refresh(){
     ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
     ctx.lineTo(dotX(data.length-1), mT+ph); ctx.lineTo(dotX(0), mT+ph); ctx.closePath();
     ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
+    // 最右端点标注最新净值
+    const lp = data.length-1, lx = dotX(lp), ly = dotY(data[lp]);
+    ctx.beginPath(); ctx.arc(lx, ly, 4, 0, Math.PI*2); ctx.fillStyle = "#3fb950"; ctx.fill();
+    ctx.fillStyle = "#c9d1d9"; ctx.font = "11px sans-serif"; ctx.textAlign = "left";
+    ctx.fillText("$"+data[lp].toFixed(2), lx+8, ly > mT+ph*0.5 ? ly-5 : ly+15);
     // X轴时间（均匀取6个）
     ctx.fillStyle = "#666"; ctx.font = "10px sans-serif";
     const xTickN = 6;
-    for (let i = 0; i < xTickN; i++) {
+    for (let i = 0; i < xTickN-1; i++) {
       const ti = Math.round(i * (labels.length-1) / (xTickN-1));
       ctx.textAlign = "center"; ctx.fillText(labels[ti]||"", dotX(ti), h-4);
     }
+    // 最右侧显示"现在"
+    ctx.textAlign = "center"; ctx.fillText("现在", dotX(labels.length-1), h-4);
     // 悬浮（使用 HTML div 代替画布重绘）
     const tip = document.getElementById("chartTip");
     if (!tip) return;
