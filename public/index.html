@@ -278,14 +278,16 @@ async function refresh(){
     if (!ec || eq.length < 2) return;
     const data = eq.map(e => e.equity);
     const min = Math.min(...data) * 0.999, max = Math.max(...data) * 1.001;
-    const w = ec.parentElement.clientWidth || 600, h = 160;
-    ec.width = w * 2; ec.height = h * 2; ec.style.width = w+"px"; ec.style.height = h+"px";
-    const ctx = ec.getContext("2d"); ctx.scale(2,2);
+    if (!ec.dataset.inited) {
+      ec.dataset.inited = "1";
+      const w = ec.parentElement.clientWidth || 600; const h = 160;
+      ec.width = w * 2; ec.height = h * 2; ec.style.width = w+"px"; ec.style.height = h+"px";
+      ec.ctx = ec.getContext("2d"); ec.ctx.scale(2,2); ec._w = w; ec._h = h;
+    }
+    const ctx = ec.ctx, w = ec._w, h = ec._h;
     ctx.clearRect(0,0,w,h);
-    // 网格线
     ctx.strokeStyle = "#21262d"; ctx.lineWidth = 1;
     for (let y = 0; y < h; y += 32) { ctx.beginPath(); ctx.moveTo(0,y+h*0.1); ctx.lineTo(w,y+h*0.1); ctx.stroke(); }
-    // 曲线
     ctx.beginPath();
     for (let i = 0; i < data.length; i++) {
       const x = w * i / (data.length-1);
@@ -293,17 +295,14 @@ async function refresh(){
       i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
     }
     ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
-    // 填充
     ctx.lineTo(w, h-10); ctx.lineTo(0, h-10); ctx.closePath();
     ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
-    // 鼠标悬浮显示
     ec.onmousemove = function(e){
       const rect = ec.getBoundingClientRect();
       const mx = (e.clientX - rect.left) / rect.width * w;
-      const idx = Math.round(mx / w * (data.length-1));
-      const val = data[idx] || data[data.length-1];
+      const idx = Math.min(Math.round(mx / w * (data.length-1)), data.length-1);
+      const val = data[idx];
       ctx.clearRect(0,0,w,h);
-      // 重绘
       ctx.beginPath();
       for (let i = 0; i < data.length; i++) {
         const x = w * i / (data.length-1);
@@ -313,15 +312,12 @@ async function refresh(){
       ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
       ctx.lineTo(w, h-10); ctx.lineTo(0, h-10); ctx.closePath();
       ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
-      // 标记点
       const px = w * idx / (data.length-1);
       const py = h - (h-20) * (data[idx]-min) / (max-min) - 10;
       ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2); ctx.fillStyle = "#3fb950"; ctx.fill();
-      ctx.fillStyle = "#c9d1d9";
-      ctx.font = "13px sans-serif";
+      ctx.fillStyle = "#c9d1d9"; ctx.font = "13px sans-serif";
       ctx.fillText("$"+val.toFixed(2), px+8, py-5);
     };
-    ec.onmouseleave = function(){ ec.onmousemove({clientX:-1,clientY:-1}); };
     }catch(e){}
     document.title = `SmartTrade | 未实现盈亏 ${(a.unrealizedPnl||0)>=0?"+":""}$${sa(a.unrealizedPnl,2)}`;
     $("ts").textContent=new Date().toLocaleTimeString();
