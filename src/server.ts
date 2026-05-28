@@ -63,7 +63,6 @@ export async function startServer(host?: string, port?: number) {
       const allTrades = getTradesHistory(7) as any[];
       const trades = allTrades.filter(t => t.status === 'open' || t.status === 'closed');
 
-      // 权益历史曲线
       const equityHistory = (db.prepare(
         `SELECT time, total_equity FROM account_snapshots ORDER BY time ASC LIMIT 200`
       ).all() as any[]).map((r: any) => ({ time: r.time, equity: r.total_equity }));
