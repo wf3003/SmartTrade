@@ -423,6 +423,11 @@ async function aiDecisionCycle() {
     if (aiCycleNumber <= STARTUP_COOLDOWN_CYCLES) {
       // 跳过开仓，但持仓指令照常执行
       let openedThisCycle = MAX_NEW_PER_CYCLE; // 直接跳过
+      if (!(report as any).tradeResults) (report as any).tradeResults = [];
+      for (const trade of report.newTrades) {
+        if (trade.action === "hold") continue;
+        (report as any).tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "启动保护中" });
+      }
     } else if (report.newTrades && report.newTrades.length > 0) {
       const actionable = report.newTrades
         .filter(t => t.action !== "hold")
