@@ -14,6 +14,7 @@ import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calc
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, setCacheData } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
+import { aiTradeReview, buildTradeSummary } from "./ai-review";
 import { 
   db, 
   getOpenPositions,
@@ -27,6 +28,7 @@ import {
   updatePartialClose,
   getOpenPositionPeakPnlMap,
   updatePeakPnlInDb,
+  getTradesHistory,
 } from "./db";
 
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓
@@ -600,6 +602,19 @@ async function aiDecisionCycle() {
       const top = report.analysis.filter(a => Math.abs(a.score) >= 6).slice(0, 3);
       for (const a of top) {
         logger.info(`  📊 ${a.symbol}: ${a.trend}(${a.strength}) score:${a.score} — ${a.summary?.slice(0, 60)}`);
+      }
+    }
+
+    // 6. AI 交易复盘（每 72 周期≈6 小时一次）
+    if (aiCycleNumber % 72 === 0 && aiCycleNumber > 0) {
+      const allTrades = getTradesHistory(7) as any[];
+      const tradeSummary = buildTradeSummary(allTrades);
+      const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:5-10% 跟踪:1.5%/0.6%`;
+      const decStats = `本周信号:${report.newTrades.length}个 已开仓:${positions.length}个`;
+      const review = await aiTradeReview(tradeSummary, decStats, configStr);
+      if (review) {
+        logger.info(`📊 AI 交易复盘:\n${review}`);
+        (report as any).aiReviewSummary = review;
       }
     }
   } catch (e: any) {
