@@ -260,7 +260,8 @@ async function refresh(){
     ec.style.display="";
     const data = eq.map(e => e.equity);
     const labels = eq.map(e => new Date(e.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
-    const min = Math.min(...data) * 0.999, max = Math.max(...data) * 1.001;
+    const min = Math.min(...data), max = Math.max(...data);
+    const pad = Math.max((max - min) * 0.05, 1);
     if (!ec._w) { ec._w = ec.clientWidth; ec._h = ec.clientHeight || 160; }
     const w = ec._w, h = ec._h;
     const mL = 50, mR = 8, mT = 8, mB = 4; // 边距
@@ -268,13 +269,14 @@ async function refresh(){
     ec.width = w; ec.height = h;
     const ctx = ec.getContext("2d");
     const dotX = (i) => mL + pw * i / (data.length-1);
-    const dotY = (v) => mT + ph - ph * (v - min) / (max - min);
+    const rMin = min - pad, rMax = max + pad;
+    const dotY = (v) => mT + ph - ph * (v - rMin) / (rMax - rMin);
     ctx.clearRect(0,0,w,h);
     // Y轴金额
     ctx.fillStyle = "#8b949e"; ctx.font = "11px sans-serif";
     const steps = 4;
     for (let i = 0; i <= steps; i++) {
-      const v = min + (max - min) * i / steps;
+      const v = rMin + (rMax - rMin) * i / steps;
       const y = mT + ph - ph * i / steps;
       ctx.fillText("$"+v.toFixed(0), 2, y+3);
     }
@@ -299,7 +301,7 @@ async function refresh(){
       const val = data[idx];
       ctx.clearRect(0,0,w,h);
       ctx.fillStyle = "#8b949e"; ctx.font = "11px sans-serif";
-      for (let i = 0; i <= steps; i++) { const v = min + (max-min)*i/steps; ctx.fillText("$"+v.toFixed(0), 2, mT+ph-ph*i/steps+3); }
+      for (let i = 0; i <= steps; i++) { const v = rMin + (rMax-rMin)*i/steps; ctx.fillText("$"+v.toFixed(0), 2, mT+ph-ph*i/steps+3); }
       ctx.beginPath();
       for (let i = 0; i < data.length; i++) { const x = dotX(i), y = dotY(data[i]); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
       ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
