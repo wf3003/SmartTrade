@@ -342,6 +342,9 @@ async function aiDecisionCycle() {
           .map(([s, d]) => `${s}: ${d.direction === "agree" ? "✅" : d.direction === "disagree" ? "❌" : "➖"} ${d.reason}`)
           .join("\n");
         report.summary += `\n\n🤖 AI 审核:\n${aiLines}`;
+        (report as any).aiReview = Array.from(aiOpinions.entries()).map(([s, d]) => ({
+          symbol: s, direction: d.direction, reason: d.reason,
+        }));
       }
     }
 

@@ -206,16 +206,23 @@ async function refresh(){
     if(sm || posCmds.length || newTrades.length){
       let html='<div style="color:#d2991d;font-weight:600;font-size:16px;margin-bottom:8px">最终决策</div>';
       if(sm) html+='<div style="color:#3fb950;font-size:15px;line-height:1.5;margin-bottom:8px">'+sm+'</div>';
-      if(posCmds.length){
+      const nonHoldCmds = posCmds.filter(p => p.action !== "hold");
+      if(nonHoldCmds.length){
         html+='<div style="margin-bottom:6px;font-size:14px;color:#8b949e">📋 持仓指令:</div>';
-        for(const p of posCmds){
-          html+=`<div style="font-size:13px;margin-left:8px;color:#c9d1d9">${p.symbol}: ${p.action} — ${p.reason||""}</div>`;
+        for(const p of nonHoldCmds){
+          html+=`<div style="font-size:13px;margin-left:8px;color:#d2991d">${p.symbol}: ${p.action} — ${p.reason||""}</div>`;
         }
       }
       if(newTrades.length){
         html+='<div style="margin-top:6px;margin-bottom:6px;font-size:14px;color:#8b949e">📊 交易信号:</div>';
+        const aiReview = (d.fullReport||{}).aiReview||[];
         for(const t of newTrades){
           html+=`<div style="font-size:13px;margin-left:8px;color:${t.action==="buy"?"#3fb950":"#f85149"}">${t.symbol}: ${t.action==="buy"?"做多":"做空"} ${t.leverage}x — ${t.reason||""}</div>`;
+          const ai = aiReview.find((r:any) => r.symbol === t.symbol);
+          if(ai){
+            const emoji = ai.direction === "agree" ? "✅" : ai.direction === "disagree" ? "❌" : "➖";
+            html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ${emoji} ${ai.reason||""}</div>`;
+          }
         }
       }
       if(logs.length){
