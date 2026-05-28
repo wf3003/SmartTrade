@@ -263,7 +263,7 @@ async function refresh(){
     const pad = Math.max((max - min) * 0.05, 1);
     if (!ec._w) ec._w = ec.clientWidth;
     const w = ec._w, h = ec.clientHeight || 280;
-    const mL = 50, mR = 8, mT = 8, mB = 4; // 边距
+    const mL = 60, mR = 8, mT = 8, mB = 4; // 边距
     const pw = w - mL - mR, ph = h - mT - mB;
     ec.width = w; ec.height = h;
     const ctx = ec.getContext("2d");
@@ -277,7 +277,7 @@ async function refresh(){
     for (let i = 0; i <= steps; i++) {
       const v = rMin + (rMax - rMin) * i / steps;
       const y = mT + ph - ph * i / steps;
-      ctx.fillText("$"+v.toFixed(0), 2, y+3);
+      ctx.fillText("$"+v.toFixed(0), 6, y+3);
     }
     // 曲线
     ctx.beginPath();
@@ -303,7 +303,7 @@ async function refresh(){
       const val = data[idx];
       ctx.clearRect(0,0,w,h);
       ctx.fillStyle = "#8b949e"; ctx.font = "11px sans-serif";
-      for (let i = 0; i <= steps; i++) { const v = rMin + (rMax-rMin)*i/steps; ctx.fillText("$"+v.toFixed(0), 2, mT+ph-ph*i/steps+3); }
+      for (let i = 0; i <= steps; i++) { const v = rMin + (rMax-rMin)*i/steps; ctx.fillText("$"+v.toFixed(0), 6, mT+ph-ph*i/steps+3); }
       ctx.beginPath();
       for (let i = 0; i < data.length; i++) { const x = dotX(i), y = dotY(data[i]); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
       ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
