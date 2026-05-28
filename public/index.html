@@ -263,7 +263,7 @@ async function refresh(){
     const min = Math.min(...data) * 0.999, max = Math.max(...data) * 1.001;
     if (!ec._w) { ec._w = ec.clientWidth; ec._h = ec.clientHeight || 160; }
     const w = ec._w, h = ec._h;
-    const mL = 50, mR = 8, mT = 8, mB = 18; // 边距
+    const mL = 50, mR = 8, mT = 8, mB = 4; // 边距
     const pw = w - mL - mR, ph = h - mT - mB;
     ec.width = w; ec.height = h;
     const ctx = ec.getContext("2d");
@@ -288,9 +288,9 @@ async function refresh(){
     ctx.lineTo(dotX(data.length-1), mT+ph); ctx.lineTo(dotX(0), mT+ph); ctx.closePath();
     ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
     // X轴时间（首尾）
-    ctx.fillStyle = "#8b949e"; ctx.font = "10px sans-serif";
-    ctx.textAlign = "left"; ctx.fillText(labels[0]||"", mL, h-2);
-    ctx.textAlign = "right"; ctx.fillText(labels[labels.length-1]||"", w-mR, h-2);
+    ctx.fillStyle = "#666"; ctx.font = "10px sans-serif";
+    ctx.textAlign = "left"; ctx.fillText(labels[0]||"", mL, h-4);
+    ctx.textAlign = "right"; ctx.fillText(labels[labels.length-1]||"", w-mR, h-4);
     // 悬浮
     ec.onmousemove = function(e){
       const rect = ec.getBoundingClientRect();
@@ -305,8 +305,8 @@ async function refresh(){
       ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
       ctx.lineTo(dotX(data.length-1), mT+ph); ctx.lineTo(dotX(0), mT+ph); ctx.closePath();
       ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
-      ctx.fillStyle = "#8b949e"; ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.fillText(labels[0]||"", mL, h-2);
-      ctx.textAlign = "right"; ctx.fillText(labels[labels.length-1]||"", w-mR, h-2);
+      ctx.fillStyle = "#666"; ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.fillText(labels[0]||"", mL, h-4);
+      ctx.textAlign = "right"; ctx.fillText(labels[labels.length-1]||"", w-mR, h-4);
       const px = dotX(idx), py = dotY(data[idx]);
       ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2); ctx.fillStyle = "#3fb950"; ctx.fill();
       ctx.fillStyle = "#c9d1d9"; ctx.font = "13px sans-serif"; ctx.textAlign = "left";
