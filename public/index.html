@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SmartTrade</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px;font-size:18px}
@@ -271,26 +271,58 @@ async function refresh(){
       }).join("");
     }
 
-    // 权益曲线
+    // 权益曲线（纯 Canvas 手绘）
     try{
     const eq = d.equityHistory || [];
     const ec = document.getElementById("equityChart");
-    if (ec && eq.length > 1 && typeof Chart !== "undefined") {
-      const labels = eq.map(e => new Date(e.time).toLocaleTimeString("zh-CN", {hour:"2-digit",minute:"2-digit"}));
-      const data = eq.map(e => e.equity);
-      if (window._equityChart) { window._equityChart.data.labels = labels; window._equityChart.data.datasets[0].data = data; window._equityChart.update("none"); }
-      else {
-        window._equityChart = new Chart(ec, {
-          type: "line",
-          data: { labels, datasets: [{ label: "净值", data, borderColor: "#3fb950", backgroundColor: "rgba(63,185,80,0.08)", fill: true, pointRadius: 0, borderWidth: 2, tension: 0.3 }] },
-          options: {
-            responsive: true, maintainAspectRatio: false, animation: false,
-            scales: { x: { display: false }, y: { grid: { color: "#21262d" }, ticks: { color: "#8b949e", callback: v => "$"+v.toFixed(0) } } },
-            plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => "$"+ctx.parsed.y.toFixed(2) } } },
-          },
-        });
+    if (!ec || eq.length < 2) return;
+    const data = eq.map(e => e.equity);
+    const min = Math.min(...data) * 0.999, max = Math.max(...data) * 1.001;
+    const w = ec.parentElement.clientWidth || 600, h = 160;
+    ec.width = w * 2; ec.height = h * 2; ec.style.width = w+"px"; ec.style.height = h+"px";
+    const ctx = ec.getContext("2d"); ctx.scale(2,2);
+    ctx.clearRect(0,0,w,h);
+    // 网格线
+    ctx.strokeStyle = "#21262d"; ctx.lineWidth = 1;
+    for (let y = 0; y < h; y += 32) { ctx.beginPath(); ctx.moveTo(0,y+h*0.1); ctx.lineTo(w,y+h*0.1); ctx.stroke(); }
+    // 曲线
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = w * i / (data.length-1);
+      const y = h - (h-20) * (data[i]-min) / (max-min) - 10;
+      i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
+    // 填充
+    ctx.lineTo(w, h-10); ctx.lineTo(0, h-10); ctx.closePath();
+    ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
+    // 鼠标悬浮显示
+    ec.onmousemove = function(e){
+      const rect = ec.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) / rect.width * w;
+      const idx = Math.round(mx / w * (data.length-1));
+      const val = data[idx] || data[data.length-1];
+      ctx.clearRect(0,0,w,h);
+      // 重绘
+      ctx.beginPath();
+      for (let i = 0; i < data.length; i++) {
+        const x = w * i / (data.length-1);
+        const y = h - (h-20) * (data[i]-min) / (max-min) - 10;
+        i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
       }
-    }}catch(e){}
+      ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.lineTo(w, h-10); ctx.lineTo(0, h-10); ctx.closePath();
+      ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
+      // 标记点
+      const px = w * idx / (data.length-1);
+      const py = h - (h-20) * (data[idx]-min) / (max-min) - 10;
+      ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2); ctx.fillStyle = "#3fb950"; ctx.fill();
+      ctx.fillStyle = "#c9d1d9";
+      ctx.font = "13px sans-serif";
+      ctx.fillText("$"+val.toFixed(2), px+8, py-5);
+    };
+    ec.onmouseleave = function(){ ec.onmousemove({clientX:-1,clientY:-1}); };
+    }catch(e){}
     document.title = `SmartTrade | 未实现盈亏 ${(a.unrealizedPnl||0)>=0?"+":""}$${sa(a.unrealizedPnl,2)}`;
     $("ts").textContent=new Date().toLocaleTimeString();
     if(d.cycle) $("cycle").textContent="#"+d.cycle.number+(d.cycle.time?" | "+new Date(d.cycle.time).toLocaleTimeString():"");
