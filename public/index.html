@@ -10,7 +10,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;
 h1{color:#58a6ff;font-size:26px;margin-bottom:8px}
 h2{color:#8b949e;font-weight:400;font-size:18px;margin-bottom:16px}
 h3{color:#58a6ff;font-size:20px;margin:20px 0 10px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,380px));gap:16px;margin-bottom:20px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:18px}
 .card h4{color:#58a6ff;font-size:16px;margin-bottom:10px}
 .stat{display:flex;justify-content:space-between;padding:5px 0;font-size:17px;border-bottom:1px solid #21262d}
@@ -162,17 +162,13 @@ async function refresh(){
       `<div class="stat"><span class="label">未实现盈亏</span><span class="value ${sc(a.unrealizedPnl)}">$${sa(a.unrealizedPnl,2)}</span></div>`+
       `<div class="stat"><span class="label">已用保证金</span><span class="value">$${sa(a.marginUsed,2)}</span></div>`+
       `<div class="stat"><span class="label">盈亏值</span><span class="value ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}</span></div>`+
-      `<div class="stat"><span class="label">盈亏率</span><span class="value ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</span></div></div>`+
+      `<div class="stat"><span class="label">盈亏率</span><span class="value ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</span></div></div>`;
       `<div class="card"><h4>配置</h4>`+
-      `<div class="stat"><span class="label">最大杠杆</span><span class="value">${d.config.maxLeverage}x</span></div>`+
+      `<div class="stat"><span class="label">杠杆基数</span><span class="value">${d.config.defaultLeverage}x (可调 ${Math.round(d.config.defaultLeverage*0.4)}x-${d.config.defaultLeverage}x)</span></div>`+
       `<div class="stat"><span class="label">最大持仓数</span><span class="value">${d.config.maxPositions}</span></div>`+
       `<div class="stat"><span class="label">AI 模型</span><span class="value">${d.config.model}</span></div>`+
       `<div class="stat"><span class="label">止损</span><span class="value red">$${d.config.stopLossUsdt}</span></div>`+
-      `<div class="stat"><span class="label">部分止盈 1</span><span class="value">${d.config.partialTP.stage1.trigger}→${d.config.partialTP.stage1.closePercent}%</span></div></div>`+
-      `<div class="card"><h4>风控</h4>`+
-      `<div class="stat"><span class="label">持仓数</span><span class="value ${(d.positions||[]).length>=d.config.maxPositions?"yellow":"green"}">${(d.positions||[]).length}/${d.config.maxPositions}</span></div>`+
-      `<div class="stat"><span class="label">部分止盈 2</span><span class="value">${d.config.partialTP.stage2.trigger}→${d.config.partialTP.stage2.closePercent}%</span></div>`+
-      `<div class="stat"><span class="label">部分止盈 3</span><span class="value">${d.config.partialTP.stage3.trigger}→${d.config.partialTP.stage3.closePercent}%</span></div></div>`;
+      `<div class="stat"><span class="label">跟踪止盈</span><span class="value green">${d.config.trailStopRange}</span></div></div>`;
 
     // positions
     const pos=d.positions||[];
@@ -230,7 +226,7 @@ async function refresh(){
     }
 
     // trades
-    const ts=d.recentTrades||[];
+    const ts=(d.recentTrades||[]).map(t=>({...t,_sort:new Date(t.status==="closed"&&t.exit_time?t.exit_time:t.entry_time).getTime()})).sort((a,b)=>b._sort-a._sort);
     $("trade-count").textContent="("+ts.length+"笔)";
     if(ts.length===0){
       $("trade-table").innerHTML='<tr><td class="num" colspan="11" style="color:#8b949e;padding:20px;text-align:center">暂无交易</td></tr>';
@@ -245,7 +241,8 @@ async function refresh(){
         const pnl=isClosed?(t.pnl||0):0;
         const pnlPct=isClosed?(t.pnl_pct||0):0;
         const pnlColor=pnl>=0?"green":"red";
-        return `<tr><td class="num" style="color:#8b949e">${i+1}</td><td class="num">${dt(t.entry_time)}</td><td><b>${t.symbol}</b></td><td style="color:${dirColor}">${side}</td><td class="num">${t.leverage}x</td><td class="num">$${sa(t.entry_price,4)}</td><td class="num">${qtyDisplay}</td><td class="num">$${sa(val,2)}</td><td class="num">$${sa(mg,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</td></tr>`;
+        const showTime=isClosed&&t.exit_time?t.exit_time:t.entry_time;
+        return `<tr><td class="num" style="color:#8b949e">${i+1}</td><td class="num">${dt(showTime)}</td><td><b>${t.symbol}</b></td><td style="color:${dirColor}">${side}</td><td class="num">${t.leverage}x</td><td class="num">$${sa(t.entry_price,4)}</td><td class="num">${qtyDisplay}</td><td class="num">$${sa(val,2)}</td><td class="num">$${sa(mg,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</td></tr>`;
       }).join("");
     }
 

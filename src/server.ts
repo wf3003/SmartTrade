@@ -75,9 +75,10 @@ export async function startServer(host?: string, port?: number) {
         config: {
           symbols: CONFIG.symbols,
           maxLeverage: CONFIG.maxLeverage,
+          defaultLeverage: CONFIG.defaultLeverage,
           maxPositions: CONFIG.maxPositions,
           model: CONFIG.ai.model,
-          partialTP: CONFIG.partialTP,
+          trailStopRange: "1.5%/0.6%→3%/0.5%",
           stopLossUsdt: CONFIG.accountStopLossUsdt,
           takeProfitUsdt: CONFIG.accountTakeProfitUsdt,
           initialBalance: CONFIG.initialBalance,

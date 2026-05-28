@@ -4,17 +4,14 @@
  */
 import { CONFIG } from "./config";
 import { logger } from "./logger";
-import { exchangeManager, type MarketData, type Position, type AccountInfo } from "./exchanges";
-import { db, updatePartialClose, closeTrade, getTradesToday } from "./db";
+import { exchangeManager, type AccountInfo } from "./exchanges";
+import { getTradesToday } from "./db";
 
 // 账户峰值追踪（用于回撤检查）
 let peakEquity = 0;
 // 当日累计亏损追踪
 let dailyLoss = 0;
 let dailyLossDate = "";
-
-// 已触发的分批止盈阶段（持仓级跟踪）
-const partialTPTriggered = new Map<number, Set<string>>();
 
 export interface RiskCheck {
   allowOpen: boolean;
@@ -63,84 +60,7 @@ export function checkAccountRisk(account: AccountInfo, livePositions: number = 0
   return { allowOpen: true, accountStop: false };
 }
 
-// ========== 分批止盈检查 ==========
-export interface PartialTPResult {
-  shouldClose: boolean;
-  closePercent: number;
-  stage: string;
-  description: string;
-}
 
-export function checkPartialTakeProfit(
-  positionId: number,
-  currentPnlPct: number,
-  alreadyClosedPct: number
-): PartialTPResult | null {
-  const { stage1, stage2, stage3 } = CONFIG.partialTP;
-
-  const stages = [
-    { name: "stage1", trigger: stage1.trigger, closePercent: stage1.closePercent },
-    { name: "stage2", trigger: stage2.trigger, closePercent: stage2.closePercent },
-    { name: "stage3", trigger: stage3.trigger, closePercent: stage3.closePercent },
-  ];
-
-  for (const stage of stages) {
-    if (currentPnlPct >= stage.trigger) {
-      if (alreadyClosedPct < stage.closePercent) {
-        const thisClosePct = stage.closePercent - alreadyClosedPct;
-        return {
-          shouldClose: true,
-          closePercent: thisClosePct,
-          stage: stage.name,
-          description: `分批止盈 ${stage.name}: 盈利${currentPnlPct.toFixed(1)}% ≥ ${stage.trigger}%, 平仓${thisClosePct}% (累计${stage.closePercent}%)`,
-        };
-      }
-    }
-  }
-  return null;
-}
-
-// ========== 分批止盈执行 ==========
-export async function executePartialClose(
-  positionId: number,
-  symbol: string,
-  side: "long" | "short",
-  totalQty: number,
-  closePercent: number,
-  entryPrice: number,
-  currentPrice: number,
-  leverage: number
-): Promise<boolean> {
-  let closeQty = Math.floor(totalQty * closePercent / 100);
-  if (closeQty <= 0) closeQty = Math.min(1, totalQty);
-
-  try {
-    const closeResult = await exchangeManager.closePosition(symbol, side, closeQty);
-
-    const priceDiff = currentPrice - entryPrice;
-    const dir = side === "long" ? 1 : -1;
-    const pnl = priceDiff * closeQty * dir;
-    const pnlPct = entryPrice > 0 ? (priceDiff / entryPrice * 100 * leverage * dir) : 0;
-
-    logger.warn(`🔒 分批止盈 | ${symbol} ${side} | 平 ${closeQty}/${totalQty} 张 | PnL: $${pnl.toFixed(2)}`);
-
-    // 更新数据库中的 partial_close_pct
-    const current = (db.prepare("SELECT partial_close_pct FROM trades WHERE id = ?").get(positionId) as any)?.partial_close_pct || 0;
-    const newPct = current + closePercent;
-    updatePartialClose(positionId, newPct, closeQty, pnl);
-
-    // 如果完全平仓（累计 100%），关闭记录
-    if (newPct >= 100) {
-      const closeFee = closeResult.fee || 0;
-      closeTrade(positionId, currentPrice, totalQty, pnl, pnlPct, closeFee, "partial_tp");
-    }
-
-    return true;
-  } catch (e: any) {
-    logger.error(`分批止盈失败 ${symbol}: ${e.message}`);
-    return false;
-  }
-}
 
 // ========== 获取当前价格 ==========
 export async function getCurrentPrice(symbol: string): Promise<number> {
@@ -164,8 +84,8 @@ export interface StopLossResult {
 
 /**
  * 检查是否触发止损（ATR 动态止损）
- * 止损距离 = 1.5 × ATR% × 杠杆，限制在 8%~15% 之间
- * 低波动币种用 8% 兜底，高波动币种自动放宽
+ * 止损距离 = 1.2 × ATR% × 杠杆，限制在 5%~10% 之间
+ * 低波动币种用 5% 兜底，高波动币种自动放宽
  */
 export function checkStopLoss(
   currentPnlPct: number,
@@ -173,10 +93,10 @@ export function checkStopLoss(
   leverage: number = 5,
   atrPct: number = 0.015
 ): StopLossResult | null {
-  const atrStopPct = Math.round(atrPct * 1.5 * leverage * 100 * 10) / 10;
-  const stopThreshold = Math.max(Math.min(atrStopPct, 15), 8);
+  const atrStopPct = Math.round(atrPct * 1.2 * leverage * 100 * 10) / 10;
+  const stopThreshold = Math.max(Math.min(atrStopPct, 10), 5);
   if (currentPnlPct <= -stopThreshold) {
-    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × 1.5 × ${leverage}x = ${stopThreshold.toFixed(0)}%)` };
+    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × 1.2 × ${leverage}x = ${stopThreshold.toFixed(0)}%)` };
   }
   return null;
 }

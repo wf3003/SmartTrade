@@ -60,13 +60,6 @@ export const CONFIG = {
   maxDrawdownPercent: envNum("MAX_DRAWDOWN_PERCENT", 30),
   dailyLossLimitUsdt: envNum("DAILY_LOSS_LIMIT_USDT", 200),
 
-  // 分批止盈
-  partialTP: {
-    stage1: { trigger: envNum("PARTIAL_TP_STAGE1_TRIGGER", 10), closePercent: envNum("PARTIAL_TP_STAGE1_CLOSE", 40) },
-    stage2: { trigger: envNum("PARTIAL_TP_STAGE2_TRIGGER", 20), closePercent: envNum("PARTIAL_TP_STAGE2_CLOSE", 70) },
-    stage3: { trigger: envNum("PARTIAL_TP_STAGE3_TRIGGER", 30), closePercent: envNum("PARTIAL_TP_STAGE3_CLOSE", 100) },
-  },
-
   // 服务器
   port: envNum("PORT", 3101),
   host: envStr("HOST", "0.0.0.0"),

@@ -11,3 +11,9 @@ export const atrCache = new Map<string, number>();
 export function setAtrCache(symbol: string, atrPct: number) {
   atrCache.set(symbol, atrPct);
 }
+
+/** 各币种 1h RSI 缓存 */
+export const rsiCache = new Map<string, number>();
+export function setRsiCache(symbol: string, rsi: number) {
+  rsiCache.set(symbol, rsi);
+}

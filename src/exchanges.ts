@@ -312,13 +312,25 @@ class ExchangeManager {
 
     // 设置杠杆 — OKX 需要 mgnMode + posSide 才生效
     if (typeof client.setLeverage === "function") {
+      let setOK = false;
+      // 方式一：完整参数
       try {
         await client.setLeverage(leverage, swapSymbol, {
           mgnMode: "isolated",
           posSide: side === "long" ? "long" : "short",
         });
-      } catch (e: any) {
-        logger.warn(`⚠️ setLeverage 失败: ${symbol} → ${leverage}x 未生效 (${e.message?.slice(0,50)||"未知"})`);
+        setOK = true;
+      } catch {}
+      // 方式二：不带 posSide
+      if (!setOK) {
+        try { await client.setLeverage(leverage, swapSymbol, { mgnMode: "isolated" }); setOK = true; } catch {}
+      }
+      // 方式三：纯默认
+      if (!setOK) {
+        try { await client.setLeverage(leverage, swapSymbol); setOK = true; } catch {}
+      }
+      if (!setOK) {
+        logger.warn(`⚠️ setLeverage 全失败: ${symbol} → ${leverage}x 未生效，使用交易所当前杠杆`);
       }
     }
     // 设置持仓模式（OKX 逐仓 isolated）
