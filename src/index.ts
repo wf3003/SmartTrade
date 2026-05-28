@@ -334,7 +334,8 @@ async function aiDecisionCycle() {
         .map(([sym, t]) => `${sym}:$${t.price}`).join(", ");
       aiOpinions = await aiDirectionCheck(report.newTrades, tickerSummary);
       if (aiOpinions && aiOpinions.size > 0) {
-        const logStr = Array.from(aiOpinions.entries()).map(([s, d]) => `${s}:${d.direction}`).join(" ");
+        const dirLabel = (d: string) => d === "agree" ? "认同" : d === "disagree" ? "不认同" : "不确定";
+        const logStr = Array.from(aiOpinions.entries()).map(([s, d]) => `${s}:${dirLabel(d.direction)}`).join(" | ");
         logger.info(`🤖 AI 方向复核: ${logStr}`);
         // 注入 AI 理由到 summary
         const aiLines = Array.from(aiOpinions.entries())
