@@ -252,50 +252,64 @@ async function refresh(){
       $("summary-box").style.display="block";
     }else{$("summary-box").style.display="none"}
 
-    // 权益曲线
+    // 权益曲线（Y轴金额 + X轴时间）
     try{
     const eq = d.equityHistory || [];
     const ec = document.getElementById("equityChart");
     if (!ec || eq.length < 2) { if(ec)ec.style.display="none"; return; }
     ec.style.display="";
     const data = eq.map(e => e.equity);
+    const labels = eq.map(e => new Date(e.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
     const min = Math.min(...data) * 0.999, max = Math.max(...data) * 1.001;
     if (!ec._w) { ec._w = ec.clientWidth; ec._h = ec.clientHeight || 160; }
     const w = ec._w, h = ec._h;
-    ec.width = ec._w; ec.height = ec._h;
+    const mL = 50, mR = 8, mT = 8, mB = 18; // 边距
+    const pw = w - mL - mR, ph = h - mT - mB;
+    ec.width = w; ec.height = h;
     const ctx = ec.getContext("2d");
+    const dotX = (i) => mL + pw * i / (data.length-1);
+    const dotY = (v) => mT + ph - ph * (v - min) / (max - min);
     ctx.clearRect(0,0,w,h);
-    ctx.strokeStyle = "#21262d"; ctx.lineWidth = 1;
-    for (let y = 0; y < h; y += 32) { ctx.beginPath(); ctx.moveTo(0,y+h*0.1); ctx.lineTo(w,y+h*0.1); ctx.stroke(); }
+    // Y轴金额
+    ctx.fillStyle = "#8b949e"; ctx.font = "11px sans-serif";
+    const steps = 4;
+    for (let i = 0; i <= steps; i++) {
+      const v = min + (max - min) * i / steps;
+      const y = mT + ph - ph * i / steps;
+      ctx.fillText("$"+v.toFixed(0), 2, y+3);
+    }
+    // 曲线
     ctx.beginPath();
     for (let i = 0; i < data.length; i++) {
-      const x = w * i / (data.length-1);
-      const y = h - (h-20) * (data[i]-min) / (max-min) - 10;
+      const x = dotX(i), y = dotY(data[i]);
       i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
     }
     ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
-    ctx.lineTo(w, h-10); ctx.lineTo(0, h-10); ctx.closePath();
+    ctx.lineTo(dotX(data.length-1), mT+ph); ctx.lineTo(dotX(0), mT+ph); ctx.closePath();
     ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
+    // X轴时间（首尾）
+    ctx.fillStyle = "#8b949e"; ctx.font = "10px sans-serif";
+    ctx.textAlign = "left"; ctx.fillText(labels[0]||"", mL, h-2);
+    ctx.textAlign = "right"; ctx.fillText(labels[labels.length-1]||"", w-mR, h-2);
+    // 悬浮
     ec.onmousemove = function(e){
       const rect = ec.getBoundingClientRect();
       const mx = (e.clientX - rect.left) / rect.width * w;
-      const idx = Math.min(Math.max(Math.round(mx / w * (data.length-1)), 0), data.length-1);
+      const idx = Math.min(Math.max(Math.round((mx - mL) / pw * (data.length-1)), 0), data.length-1);
       const val = data[idx];
       ctx.clearRect(0,0,w,h);
-      for (let y = 0; y < h; y += 32) { ctx.beginPath(); ctx.moveTo(0,y+h*0.1); ctx.lineTo(w,y+h*0.1); ctx.stroke(); }
+      ctx.fillStyle = "#8b949e"; ctx.font = "11px sans-serif";
+      for (let i = 0; i <= steps; i++) { const v = min + (max-min)*i/steps; ctx.fillText("$"+v.toFixed(0), 2, mT+ph-ph*i/steps+3); }
       ctx.beginPath();
-      for (let i = 0; i < data.length; i++) {
-        const x = w * i / (data.length-1);
-        const y = h - (h-20) * (data[i]-min) / (max-min) - 10;
-        i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-      }
+      for (let i = 0; i < data.length; i++) { const x = dotX(i), y = dotY(data[i]); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
       ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
-      ctx.lineTo(w, h-10); ctx.lineTo(0, h-10); ctx.closePath();
+      ctx.lineTo(dotX(data.length-1), mT+ph); ctx.lineTo(dotX(0), mT+ph); ctx.closePath();
       ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
-      const px = w * idx / (data.length-1);
-      const py = h - (h-20) * (data[idx]-min) / (max-min) - 10;
+      ctx.fillStyle = "#8b949e"; ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.fillText(labels[0]||"", mL, h-2);
+      ctx.textAlign = "right"; ctx.fillText(labels[labels.length-1]||"", w-mR, h-2);
+      const px = dotX(idx), py = dotY(data[idx]);
       ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2); ctx.fillStyle = "#3fb950"; ctx.fill();
-      ctx.fillStyle = "#c9d1d9"; ctx.font = "13px sans-serif";
+      ctx.fillStyle = "#c9d1d9"; ctx.font = "13px sans-serif"; ctx.textAlign = "left";
       ctx.fillText("$"+val.toFixed(2), px+8, py-5);
     };
     }catch(e){}
