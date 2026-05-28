@@ -205,12 +205,12 @@ async function refresh(){
     const logs=(exe.log||[]);
     if(sm || posCmds.length || newTrades.length){
       let html='<div style="color:#d2991d;font-weight:600;font-size:16px;margin-bottom:8px">最终决策</div>';
-      if(sm) html+='<div style="color:#3fb950;font-size:15px;line-height:1.5;margin-bottom:8px">'+sm+'</div>';
+      if(sm) html+='<div style="color:#3fb950;font-size:14px;line-height:1.5;margin-bottom:8px">'+sm+'</div>';
       const nonHoldCmds = posCmds.filter(p => p.action !== "hold");
       if(nonHoldCmds.length){
         html+='<div style="margin-bottom:6px;font-size:14px;color:#8b949e">📋 持仓指令:</div>';
         for(const p of nonHoldCmds){
-          html+=`<div style="font-size:13px;margin-left:8px;color:#d2991d">${p.symbol}: ${p.action} — ${p.reason||""}</div>`;
+          html+=`<div style="font-size:14px;margin-left:8px;color:#d2991d">${p.symbol}: ${p.action} — ${p.reason||""}</div>`;
         }
       }
       if(newTrades.length){
@@ -218,29 +218,24 @@ async function refresh(){
         const aiReview = (d.fullReport||{}).aiReview||[];
         const tradeRes = (d.fullReport||{}).tradeResults||[];
         for(const t of newTrades){
-          const ai = aiReview.find((r:any) => r.symbol === t.symbol);
-          const res = tradeRes.find((r:any) => r.symbol === t.symbol);
+          const ai = aiReview.find((r) => r.symbol === t.symbol);
+          const res = tradeRes.find((r) => r.symbol === t.symbol);
           if(res && res.status === "opened"){
-            // 已开仓
             const dirLabel = res.side === "long" ? "做多" : "做空";
-            html+=`<div style="font-size:13px;margin-left:8px;color:${res.side==="long"?"#3fb950":"#f85149"}">${res.symbol}: ${dirLabel} ${res.leverage}x ✅ 已开仓 ${res.qty}张 @$${typeof res.price==="number"?res.price.toFixed(res.price>100?0:4):res.price}</div>`;
-            if(ai) html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ✅ ${ai.reason||""}</div>`;
+            html+=`<div style="font-size:14px;margin-left:8px;color:${res.side==="long"?"#3fb950":"#f85149"}">${res.symbol}: ${dirLabel} ${res.leverage}x ✅ 已开仓 ${res.qty}张 @$${typeof res.price==="number"?res.price.toFixed(res.price>100?0:4):res.price}</div>`;
+            if(ai) html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
           } else if(res && res.status === "ai_rejected"){
-            // AI 不认同
-            html+=`<div style="font-size:13px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
-            html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ❌ ${res.reason||ai?.reason||""}</div>`;
+            html+=`<div style="font-size:14px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
+            html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ❌ ${res.reason||ai?.reason||""}</div>`;
           } else if(ai && ai.direction === "disagree"){
-            // AI 不认同（兜底）
-            html+=`<div style="font-size:13px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
-            html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ❌ ${ai.reason||""}</div>`;
+            html+=`<div style="font-size:14px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
+            html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ❌ ${ai.reason||""}</div>`;
           } else if(res && res.status === "skipped"){
-            // 被规则拦住
-            html+=`<div style="font-size:13px;margin-left:8px;color:#d2991d">${t.symbol}: ⏭️ ${res.reason||"未执行"}</div>`;
-            if(ai) html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
+            html+=`<div style="font-size:14px;margin-left:8px;color:#d2991d">${t.symbol}: ⏭️ ${res.reason||"未执行"}</div>`;
+            if(ai) html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
           } else {
-            // 其他未执行
-            html+=`<div style="font-size:13px;margin-left:8px;color:#d2991d">${t.symbol}: — 未执行</div>`;
-            if(ai) html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
+            html+=`<div style="font-size:14px;margin-left:8px;color:#d2991d">${t.symbol}: — 未执行</div>`;
+            if(ai) html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
           }
         }
       }
