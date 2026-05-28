@@ -244,7 +244,7 @@ async function monitorPositions() {
     const liveSymbols = new Set(positions.map(p => p.symbol));
     const dbOpen = (db.prepare(
       `SELECT * FROM trades WHERE status='open' AND (close_type IS NULL OR close_type = '')
-       AND entry_time < datetime('now', '-30 seconds')`
+       AND entry_time < datetime('now', '-5 seconds')`
     ) as any).all() as any[];
     // A. 交易所有但 DB 没有 → 补建记录（清库后恢复）
     for (const pos of uniquePositions) {
