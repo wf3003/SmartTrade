@@ -279,12 +279,13 @@ async function refresh(){
     const rMin = min - pad, rMax = max + pad;
     const dotY = (v) => mT + ph - ph * (v - rMin) / (rMax - rMin);
     ctx.clearRect(0,0,w,h);
-    // Y轴金额
-    ctx.fillStyle = "#8b949e"; ctx.font = "11px sans-serif";
+    // Y轴金额（含初值高亮）
+    ctx.font = "11px sans-serif";
     const steps = 7;
     for (let i = 0; i <= steps; i++) {
       const v = rMin + (rMax - rMin) * i / steps;
       const y = mT + ph - ph * i / steps;
+      ctx.fillStyle = Math.abs(v - initial) < Math.abs((rMax-rMin)/steps/2) ? "#d2991d" : "#8b949e";
       ctx.fillText("$"+v.toFixed(0), 6, y+3);
     }
     // 初始资金参考线（始终显示）
