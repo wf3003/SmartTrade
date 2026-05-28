@@ -568,17 +568,7 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位减半至${trade.amountPercent}%`);
         }
 
-        // 方向分散限制：同方向持仓不超过 5 个
-        const tradeSide = trade.action === "buy" ? "long" : "short";
-        const sameSideCount = positions.filter(p => p.side === tradeSide).length;
-        const maxSameDir = 8; // 放宽方向限制
-        if (sameSideCount >= maxSameDir) {
-          const msg = `⏭️ ${trade.symbol} 同方向已达${sameSideCount}/${maxSameDir}，分散风险跳过`;
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `同方向已达${sameSideCount}个` });
-          logger.info(msg);
-          execLog.push(msg);
-          continue;
-        }
+
 
         logger.warn(`🤖 AI 开仓: ${trade.action} ${trade.symbol} | ${trade.leverage}x | ${trade.amountPercent}%`);
         logger.info(`   理由: ${trade.reason}`);
