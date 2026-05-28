@@ -107,31 +107,29 @@ export async function generateStrategyReport(
       // 1h 时间框架一致性检查
       const h1Aligned = i1 && (isUp ? i1.ema20 > i1.ema50 : i1.ema20 < i1.ema50);
       if (!h1Aligned && !hasPos) {
-        // 多空矛盾：日线多/1h空 → 按1h方向做空；日线空/1h多 → 按1h方向做多
-        // 用更低置信度、更保守评分
-        if (isUp) {
-          // 日线多、1h空 → 检查做空
+        // 多空矛盾：日线多/1h空 或 日线空/1h多
+        // 规则优化：日线 ADX ≥ 60 时禁止逆日线开仓，不做追空
+        if (dailyAdx >= 60) {
+          re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60 禁止逆日线开仓`;
+        } else if (isUp) {
+          // 日线多、1h空 → execute short
           if (maDist >= -entryBand * 0.6 && maDist <= entryBand) {
             sc = -5 - Math.round(at * 3);
             sig = "sell";
             re = `${regime}/1h空/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
             cf = 0.55;
-          } else if (maDist < -entryBand * 0.6) {
-            sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/1h空/追空(${maDist.toFixed(2)}%)`; cf = 0.45;
           } else {
-            re = `${regime}/1h空/突破${entryMaName}观望`;
+            re = `${regime}/1h空/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等反弹`;
           }
         } else {
-          // 日线空、1h多 → 检查做多
+          // 日线空、1h多 → execute long
           if (maDist >= -entryBand && maDist <= entryBand * 0.6) {
             sc = 5 + Math.round(at * 3);
             sig = "buy";
             re = `${regime}/1h多/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
             cf = 0.55;
-          } else if (maDist > entryBand * 0.6) {
-            sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/1h多/追多(${maDist.toFixed(2)}%)`; cf = 0.45;
           } else {
-            re = `${regime}/1h多/跌破${entryMaName}观望`;
+            re = `${regime}/1h多/离${entryMaName}${maDist.toFixed(1)}%等回调`;
           }
         }
       } else if (isUp && !hasPos) {
@@ -184,7 +182,7 @@ export async function generateStrategyReport(
     if (sig !== "hold") {
       // 按行情类型动态计算杠杆
       let leverageMult = 1.0;
-      if (regime === "强趋势多" || regime === "强趋势空") leverageMult = 1.0;
+      if (regime === "强趋势多" || regime === "强趋势空") leverageMult = 1.5;
       else if (regime === "弱趋势多" || regime === "弱趋势空") leverageMult = 0.7;
       else leverageMult = 0.4; // 震荡偏多/空
       const dynLeverage = Math.min(CONFIG.maxLeverage,
