@@ -1,5 +1,5 @@
 /**
- * QuantMax - 配置管理
+ * SmartTrade - 配置管理
  * 从环境变量读取所有参数，提供类型安全的配置对象
  */
 import "dotenv/config";

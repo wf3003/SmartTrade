@@ -1,5 +1,5 @@
 /**
- * QuantMax - 风控模块
+ * SmartTrade - 风控模块
  * 账户级 + 持仓级 + 分批止盈
  */
 import { CONFIG } from "./config";

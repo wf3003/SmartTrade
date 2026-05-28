@@ -1,5 +1,5 @@
 /**
- * QuantMax - 入口
+ * SmartTrade - 入口
  * AI 驱动多交易所加密货币合约交易系统
  * 
  * 架构:
@@ -52,9 +52,9 @@ const openedThisSession = new Set<string>();
 
 async function main() {
   logger.info("=".repeat(50));
-  logger.info("   QuantMax — AI 多交易所合约交易系统");
+  logger.info("   SmartTrade — AI 多交易所合约交易系统");
   logger.info(`   监控: 每 ${MONITOR_INTERVAL / 1000}s | 策略决策: 每 ${DECISION_INTERVAL / 1000}s`);
-  logger.info(`   账户止损: $${CONFIG.accountStopLossUsdt} | 跟踪止盈: 1.5%/1%→3%/0.5%`);
+  logger.info(`   账户止损: $${CONFIG.accountStopLossUsdt} | 跟踪止盈: 1.5%/0.6%→3%/0.5%`);
   logger.info("=".repeat(50));
 
   await exchangeManager.init();

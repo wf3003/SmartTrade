@@ -1,5 +1,5 @@
 /**
- * QuantMax - AI 交易决策引擎
+ * SmartTrade - AI 交易决策引擎
  * 每 5 分钟输出全币种多维度分析 + 持仓管理 + 开仓决策
  */
 import OpenAI from "openai";

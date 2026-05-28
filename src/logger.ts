@@ -1,5 +1,5 @@
 /**
- * QuantMax - 日志系统 (pino)
+ * SmartTrade - 日志系统 (pino)
  * 同时输出到控制台（彩色）和文件
  */
 import pino from "pino";

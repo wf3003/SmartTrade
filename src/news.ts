@@ -12,7 +12,7 @@ export async function getMarketNews() {
     if (d) fng = { value: Number(d.value), classification: d.value_classification };
   } catch {}
   try {
-    const r = await fetch("https://min-api.cryptocompare.com/data/v2/news/?lang=EN&feeds=coindesk,cointelegraph&extraParams=QuantMax", { signal: AbortSignal.timeout(8000) });
+    const r = await fetch("https://min-api.cryptocompare.com/data/v2/news/?lang=EN&feeds=coindesk,cointelegraph&extraParams=SmartTrade", { signal: AbortSignal.timeout(8000) });
     const j = await r.json() as any;
     news = (j?.Data || []).slice(0, 5).map((h: any) => ({ title: h.title, source: h.source }));
   } catch {}

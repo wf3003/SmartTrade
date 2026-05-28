@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QuantMax</title>
+<title>SmartTrade</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px;font-size:18px}
@@ -35,7 +35,7 @@ td{padding:10px 12px;border-bottom:1px solid #21262d}
 </style>
 </head>
 <body>
-<h1>QuantMax</h1>
+<h1>SmartTrade</h1>
 <h2>AI/OKX/Gate/Binance</h2>
 <div id="ticker" style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 12px;margin-bottom:12px;overflow:hidden;height:36px;position:relative">
   <div id="ticker-inner" style="white-space:nowrap;position:absolute;animation:none;font-size:14px;color:#8b949e;line-height:20px"></div>
@@ -246,6 +246,7 @@ async function refresh(){
       }).join("");
     }
 
+    document.title = `SmartTrade | 未实现盈亏 ${(a.unrealizedPnl||0)>=0?"+":""}$${sa(a.unrealizedPnl,2)}`;
     $("ts").textContent=new Date().toLocaleTimeString();
     if(d.cycle) $("cycle").textContent="#"+d.cycle.number+(d.cycle.time?" | "+new Date(d.cycle.time).toLocaleTimeString():"");
   }catch(e){

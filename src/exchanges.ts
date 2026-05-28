@@ -1,5 +1,5 @@
 /**
- * QuantMax - 多交易所统一接口 (ccxt)
+ * SmartTrade - 多交易所统一接口 (ccxt)
  * 支持 OKX / Gate.io / Binance 合约交易
  * 
  * 符号格式:

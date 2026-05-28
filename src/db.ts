@@ -1,5 +1,5 @@
 /**
- * QuantMax - SQLite 数据库 (better-sqlite3)
+ * SmartTrade - SQLite 数据库 (better-sqlite3)
  */
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";

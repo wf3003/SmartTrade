@@ -1,5 +1,5 @@
 /**
- * QuantMax - Web 仪表盘 (Express)
+ * SmartTrade - Web 仪表盘 (Express)
  */
 import express from "express";
 import path from "path";
