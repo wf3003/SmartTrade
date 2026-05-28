@@ -42,8 +42,9 @@ td{padding:10px 12px;border-bottom:1px solid #21262d}
   <div id="ticker-inner" style="white-space:nowrap;position:absolute;animation:none;font-size:14px;color:#8b949e;line-height:20px"></div>
 </div>
 <div id="error-box"></div>
-<div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px">
-  <div class="card" style="flex:1 1 280px;min-width:260px"><h4>📈 权益曲线</h4><canvas id="equityChart" style="width:100%;height:160px"></canvas></div>
+<div id="account-row" style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px;min-height:180px">
+  <div id="account-card" class="card" style="flex:1 1 280px;min-width:240px"></div>
+  <div class="card" style="flex:2 1 380px;min-width:260px"><h4>📈 权益曲线</h4><canvas id="equityChart" style="width:100%;height:160px"></canvas></div>
 </div>
 <div class="grid" id="cards"></div>
 <h3>实时持仓 <span id="ts"></span></h3>
@@ -156,15 +157,16 @@ async function refresh(){
     const pnl=a.totalEquity-ib;
     const pnlPct=ib>0?((a.totalEquity-ib)/ib*100):0;
     const pnlColor=pnl>=0?"green":"red";
-    $("cards").innerHTML=
-      `<div class="card"><h4>账户</h4>`+
+    $("account-card").innerHTML=
+      `<h4>账户</h4>`+
       `<div class="stat"><span class="label">初始资金</span><span class="value">$${sa(ib,2)}</span></div>`+
       `<div class="stat"><span class="label">净值</span><span class="value">$${sa(a.totalEquity,2)}</span></div>`+
       `<div class="stat"><span class="label">可用</span><span class="value">$${sa(a.availableBalance,2)}</span></div>`+
       `<div class="stat"><span class="label">未实现盈亏</span><span class="value ${sc(a.unrealizedPnl)}">$${sa(a.unrealizedPnl,2)}</span></div>`+
       `<div class="stat"><span class="label">已用保证金</span><span class="value">$${sa(a.marginUsed,2)}</span></div>`+
       `<div class="stat"><span class="label">盈亏值</span><span class="value ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}</span></div>`+
-      `<div class="stat"><span class="label">盈亏率</span><span class="value ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</span></div></div>`;
+      `<div class="stat"><span class="label">盈亏率</span><span class="value ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</span></div>`;
+    $("cards").innerHTML=
       `<div class="card"><h4>配置</h4>`+
       `<div class="stat"><span class="label">杠杆基数</span><span class="value">${d.config.defaultLeverage}x (可调 ${Math.round(d.config.defaultLeverage*0.4)}x-${d.config.defaultLeverage}x)</span></div>`+
       `<div class="stat"><span class="label">最大持仓数</span><span class="value">${d.config.maxPositions}</span></div>`+
