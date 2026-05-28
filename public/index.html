@@ -261,8 +261,8 @@ async function refresh(){
     const labels = eq.map(e => new Date(e.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
     const min = Math.min(...data), max = Math.max(...data);
     const pad = Math.max((max - min) * 0.05, 1);
-    if (!ec._w) { ec._w = ec.clientWidth; ec._h = ec.clientHeight || 160; }
-    const w = ec._w, h = ec._h;
+    if (!ec._w) ec._w = ec.clientWidth;
+    const w = ec._w, h = ec.clientHeight || 210;
     const mL = 50, mR = 8, mT = 8, mB = 4; // 边距
     const pw = w - mL - mR, ph = h - mT - mB;
     ec.width = w; ec.height = h;
@@ -273,7 +273,7 @@ async function refresh(){
     ctx.clearRect(0,0,w,h);
     // Y轴金额
     ctx.fillStyle = "#8b949e"; ctx.font = "11px sans-serif";
-    const steps = 6;
+    const steps = 7;
     for (let i = 0; i <= steps; i++) {
       const v = rMin + (rMax - rMin) * i / steps;
       const y = mT + ph - ph * i / steps;
