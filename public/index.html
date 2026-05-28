@@ -201,10 +201,11 @@ async function refresh(){
       }).join("");
     }
 
-    // summary
+    // summary（含全部有评分的币种，不只newTrades）
     const sm=(d.fullReport||{}).summary||"";
     const posCmds=(d.fullReport||{}).positions||[];
     const newTrades=(d.fullReport||{}).newTrades||[];
+    const allAnalysis = (d.fullReport||{}).analysis||[];
     const exe=(d.fullReport||{}).execution||{};
     const logs=(exe.log||[]);
     if(sm || posCmds.length || newTrades.length){
@@ -240,6 +241,14 @@ async function refresh(){
             html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}${pctText}</div>`;
             if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${emoji} 评分${score} ${ai.reason||""}</div>`;
           }
+        }
+      }
+      // 被拦截的信号（在分析中有评分但未进入交易信号）
+      const blocked = allAnalysis.filter(a => a.score !== 0 && !newTrades.some(t => t.symbol === a.symbol));
+      if(blocked.length){
+        html+='<div style="margin-top:6px;margin-bottom:6px;font-size:14px;color:#8b949e">⛔ 拦截:</div>';
+        for(const b of blocked){
+          html+=`<div style="font-size:14px;margin-left:8px;color:#d2991d">${b.symbol}: score${b.score} — ${b.summary||""}</div>`;
         }
       }
       if(logs.length){
