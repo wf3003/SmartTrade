@@ -253,11 +253,15 @@ async function refresh(){
 
     // 权益曲线（Y轴金额 + X轴时间）
     try{
-    const eq = d.equityHistory || [];
     const ec = document.getElementById("equityChart");
-    if (!ec || eq.length < 2) { if(ec)ec.style.display="none"; } else {
-    ec.style.display="";
+    const eq = d.equityHistory || [];
     const initial = d.config.initialBalance || 6300;
+    if (!ec) return;
+    if (!eq || eq.length < 2) {
+      const curEq = d.account?.totalEquity || initial;
+      eq.length = 0; eq.push({time:new Date(Date.now()-60000).toISOString(), equity: initial}, {time:new Date().toISOString(), equity: curEq});
+    }
+    ec.style.display="";
     const data = eq.map(e => e.equity);
     const labels = eq.map(e => new Date(e.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
     const min = Math.min(...data), max = Math.max(...data);
