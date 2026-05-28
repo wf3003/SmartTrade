@@ -13,7 +13,7 @@ import { generateStrategyReport } from "./strategy";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache } from "./state";
-import { aiDirectionCheck } from "./ai-check";
+import { aiDirectionCheck, type AiOpinion } from "./ai-check";
 import { 
   db, 
   getOpenPositions,
@@ -328,14 +328,19 @@ async function aiDecisionCycle() {
     newCycle();
 
     // 5a. AI 方向复核（每周期一次）
-    let aiOpinions: Map<string, "agree" | "disagree" | "neutral"> | null = null;
+    let aiOpinions: Map<string, AiOpinion> | null = null;
     if (report.newTrades.length > 0) {
       const tickerSummary = Array.from(tickers.entries())
         .map(([sym, t]) => `${sym}:$${t.price}`).join(", ");
       aiOpinions = await aiDirectionCheck(report.newTrades, tickerSummary);
       if (aiOpinions && aiOpinions.size > 0) {
-        const logStr = Array.from(aiOpinions.entries()).map(([s, d]) => `${s}:${d}`).join(" ");
+        const logStr = Array.from(aiOpinions.entries()).map(([s, d]) => `${s}:${d.direction}`).join(" ");
         logger.info(`🤖 AI 方向复核: ${logStr}`);
+        // 注入 AI 理由到 summary
+        const aiLines = Array.from(aiOpinions.entries())
+          .map(([s, d]) => `${s}: ${d.direction === "agree" ? "✅" : d.direction === "disagree" ? "❌" : "➖"} ${d.reason}`)
+          .join("\n");
+        report.summary += `\n\n🤖 AI 审核:\n${aiLines}`;
       }
     }
 
@@ -478,7 +483,7 @@ async function aiDecisionCycle() {
         }
 
         // AI 方向复核
-        if (aiOpinions && aiOpinions.get(trade.symbol) === "disagree") {
+        if (aiOpinions && aiOpinions.get(trade.symbol)?.direction === "disagree") {
           const msg = `⏭️ ${trade.symbol} AI 不认同方向，跳过`;
           logger.info(msg);
           execLog.push(msg);

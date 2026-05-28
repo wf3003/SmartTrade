@@ -10,10 +10,15 @@ const openai = new OpenAI({
   baseURL: CONFIG.ai.baseURL,
 });
 
+export interface AiOpinion {
+  direction: "agree" | "disagree" | "neutral";
+  reason: string;
+}
+
 export async function aiDirectionCheck(
   signals: { symbol: string; action: string; confidence: number; score: number; reason: string }[],
   tickerSummary: string,
-): Promise<Map<string, "agree" | "disagree" | "neutral">> {
+): Promise<Map<string, AiOpinion>> {
   if (signals.length === 0) return new Map();
 
   const signalLines = signals.map(t =>
@@ -27,26 +32,28 @@ export async function aiDirectionCheck(
 策略信号：
 ${signalLines}
 
-你的任务：对每个信号判断 direction（agree/disagree/neutral），只基于当前市场状况，不要给操作建议。
+你的任务：对每个信号判断：
+- direction: agree（认同）/ disagree（不认同）/ neutral（不确定）
+- reason: 用一句话概括判断理由
 
 格式 JSON：
-{"results": [{"symbol":"BTC/USDT","direction":"agree"}, ...]}`;
+{"results": [{"symbol":"BTC/USDT","direction":"agree","reason":"趋势明确且RSI未超买"}, ...]}`;
 
   try {
     const resp = await openai.chat.completions.create({
       model: CONFIG.ai.model,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.1,
-      max_tokens: 1000,
+      max_tokens: 1500,
       response_format: { type: "json_object" },
     });
 
     const text = resp.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(text);
-    const results = new Map<string, "agree" | "disagree" | "neutral">();
+    const results = new Map<string, AiOpinion>();
     if (parsed.results) {
       for (const r of parsed.results) {
-        results.set(r.symbol, r.direction || "neutral");
+        results.set(r.symbol, { direction: r.direction || "neutral", reason: r.reason || "" });
       }
     }
     return results;
