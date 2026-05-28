@@ -85,8 +85,8 @@ async function main() {
       try {
         await Promise.race([
           aiDecisionCycle(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("决策超时")), DECISION_INTERVAL + 60_000)),
-        ]);
+          new Promise((_, reject) => setTimeout(() => reject(new Error("决策超时")), 4 * 60_000)),
+        ]).catch(() => logger.warn("⏰ 决策周期超时，跳过本轮"));
       } catch {}
       const delay = Math.max(0, nextRunAt - Date.now());
       await new Promise(r => setTimeout(r, delay));
