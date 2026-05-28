@@ -273,7 +273,7 @@ async function refresh(){
     ctx.clearRect(0,0,w,h);
     // Y轴金额
     ctx.fillStyle = "#8b949e"; ctx.font = "11px sans-serif";
-    const steps = 4;
+    const steps = 6;
     for (let i = 0; i <= steps; i++) {
       const v = rMin + (rMax - rMin) * i / steps;
       const y = mT + ph - ph * i / steps;
@@ -288,10 +288,13 @@ async function refresh(){
     ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
     ctx.lineTo(dotX(data.length-1), mT+ph); ctx.lineTo(dotX(0), mT+ph); ctx.closePath();
     ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
-    // X轴时间（首尾）
+    // X轴时间（均匀取6个）
     ctx.fillStyle = "#666"; ctx.font = "10px sans-serif";
-    ctx.textAlign = "left"; ctx.fillText(labels[0]||"", mL, h-4);
-    ctx.textAlign = "right"; ctx.fillText(labels[labels.length-1]||"", w-mR, h-4);
+    const xTickN = 6;
+    for (let i = 0; i < xTickN; i++) {
+      const ti = Math.round(i * (labels.length-1) / (xTickN-1));
+      ctx.textAlign = "center"; ctx.fillText(labels[ti]||"", dotX(ti), h-4);
+    }
     // 悬浮
     ec.onmousemove = function(e){
       const rect = ec.getBoundingClientRect();
@@ -306,12 +309,14 @@ async function refresh(){
       ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
       ctx.lineTo(dotX(data.length-1), mT+ph); ctx.lineTo(dotX(0), mT+ph); ctx.closePath();
       ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
-      ctx.fillStyle = "#666"; ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.fillText(labels[0]||"", mL, h-4);
-      ctx.textAlign = "right"; ctx.fillText(labels[labels.length-1]||"", w-mR, h-4);
+      ctx.fillStyle = "#666"; ctx.font = "10px sans-serif";
+      for (let i = 0; i < xTickN; i++) { const ti = Math.round(i*(labels.length-1)/(xTickN-1)); ctx.textAlign = "center"; ctx.fillText(labels[ti]||"", dotX(ti), h-4); }
       const px = dotX(idx), py = dotY(data[idx]);
       ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2); ctx.fillStyle = "#3fb950"; ctx.fill();
-      ctx.fillStyle = "#c9d1d9"; ctx.font = "13px sans-serif"; ctx.textAlign = "left";
-      ctx.fillText("$"+val.toFixed(2), px+8, py-5);
+      ctx.fillStyle = "#c9d1d9"; ctx.font = "13px sans-serif";
+      const rightSide = px > w * 0.7;
+      ctx.textAlign = rightSide ? "right" : "left";
+      ctx.fillText("$"+val.toFixed(2), rightSide ? px-8 : px+8, py-5);
     };
     }catch(e){}
     // decisions (已移除表格，保留变量以备后用)
