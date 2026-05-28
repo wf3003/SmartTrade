@@ -12,6 +12,13 @@ export function setAtrCache(symbol: string, atrPct: number) {
   atrCache.set(symbol, atrPct);
 }
 
+/** 上次获取的交易所账户/持仓数据（status 接口缓存） */
+export let cachedPositions: any[] = [];
+export let cachedAccount: any = {};
+export function setCacheData(account: any, positions: any[]) {
+  cachedAccount = account; cachedPositions = positions;
+}
+
 /** 各币种 1h RSI 缓存 */
 export const rsiCache = new Map<string, number>();
 export function setRsiCache(symbol: string, rsi: number) {

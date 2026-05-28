@@ -7,7 +7,7 @@ import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { db, getTradesToday, getDecisionsToday, getDecisionsHistory, getTradesHistory, getTradeStats, syncExchangeOrders, getExchangeOrders } from "./db";
 import { exchangeManager } from "./exchanges";
-import { latestReport } from "./state";
+import { latestReport, cachedPositions, cachedAccount } from "./state";
 
 let _app: express.Express | null = null;
 let cycleStartTime = new Date().toISOString();
@@ -30,10 +30,9 @@ export async function startServer(host?: string, port?: number) {
 
   app.get("/api/status", async (req, res) => {
     try {
-      const [account, positions] = await Promise.all([
-        exchangeManager.getAccount(),
-        exchangeManager.getPositions(),
-      ]);
+      // 使用缓存数据，不阻塞各交易所 API（策略周期已在拉 K 线）
+      const account = cachedAccount.totalEquity ? cachedAccount : await exchangeManager.getAccount().catch(() => cachedAccount);
+      const positions = cachedPositions.length ? cachedPositions : await exchangeManager.getPositions().catch(() => cachedPositions);
 
       // 并行获取全币种行情（5秒缓存防限频）
       const now = Date.now();
@@ -63,10 +62,6 @@ export async function startServer(host?: string, port?: number) {
       const allTrades = getTradesHistory(7) as any[];
       const trades = allTrades.filter(t => t.status === 'open' || t.status === 'closed');
 
-      const equityHistory = (db.prepare(
-        `SELECT time, total_equity FROM account_snapshots ORDER BY time ASC LIMIT 200`
-      ).all() as any[]).map((r: any) => ({ time: r.time, equity: r.total_equity }));
-
       res.json({
         ok: true,
         tickers,
@@ -76,8 +71,7 @@ export async function startServer(host?: string, port?: number) {
         recentDecisions: decisions,
         fullReport: latestReport,
         cycle: { number: cycleNumber, time: cycleStartTime },
-        equityHistory,
-        config: {
+                config: {
           symbols: CONFIG.symbols,
           maxLeverage: CONFIG.maxLeverage,
           defaultLeverage: CONFIG.defaultLeverage,

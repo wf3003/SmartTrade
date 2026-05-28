@@ -12,7 +12,7 @@ import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache } from "./state";
+import { setLatestReport, atrCache, rsiCache, setCacheData } from "./state";
 import { aiDirectionCheck, type AiOpinion } from "./ai-check";
 import { 
   db, 
@@ -279,6 +279,8 @@ async function monitorPositions() {
         margin_used: account.marginUsed,
         open_positions: positions.length,
       });
+      // 缓存最新账户+持仓供 status 接口使用（防交易所限频）
+      setCacheData(account, positions);
       lastSnapshotTime = now;
     }
   } catch (e: any) {
