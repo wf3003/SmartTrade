@@ -13,7 +13,7 @@ import { generateStrategyReport } from "./strategy";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, setCacheData } from "./state";
-import { aiDirectionCheck, type AiOpinion } from "./ai-check";
+import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { 
   db, 
   getOpenPositions,
@@ -330,22 +330,41 @@ async function aiDecisionCycle() {
     newCycle();
 
     // 5a. AI 方向复核（每周期一次）
-    let aiOpinions: Map<string, AiOpinion> | null = null;
-    if (report.newTrades.length > 0) {
-      const tickerSummary = Array.from(tickers.entries())
-        .map(([sym, t]) => `${sym}:$${t.price}`).join(", ");
-      aiOpinions = await aiDirectionCheck(report.newTrades, tickerSummary);
-      if (aiOpinions && aiOpinions.size > 0) {
-        const dirLabel = (d: string) => d === "agree" ? "认同" : d === "disagree" ? "不认同" : "不确定";
-        const logStr = Array.from(aiOpinions.entries()).map(([s, d]) => `${s}:${dirLabel(d.direction)}`).join(" | ");
+    let aiResult: AiCheckResult | null = null;
+    // AI 方向复核（每周期一次）
+    const tickerIndicators = Array.from(tickers.entries())
+      .map(([sym, t]) => {
+        const atr = (atrCache.get(sym) || 0.015) * 100;
+        const rsi = rsiCache.get(sym) || 50;
+        const analysis = report.analysis?.find((a: any) => a.symbol === sym);
+        return `${sym}:$${t.price} RSI${rsi.toFixed(0)} ATR${atr.toFixed(2)}% ${analysis?.analysis_1d || ""} ${analysis?.summary ? ("| " + analysis.summary) : ""}`;
+      }).join("\n");
+    const posLines = positions.length > 0
+      ? positions.map(p => `${p.symbol} ${p.side} PnL:${(p.unrealizedPnlPct||0).toFixed(1)}% 杠杆${p.leverage}x`).join("\n")
+      : "无";
+    aiResult = await aiDirectionCheck(report.newTrades, tickerIndicators, posLines);
+    if (aiResult) {
+      if (aiResult.signals.size > 0) {
+        const logStr = Array.from(aiResult.signals.entries()).map(([s, d]) => `${s}:评分${d.score}`).join(" | ");
         logger.info(`🤖 AI 方向复核: ${logStr}`);
-        for (const [s, d] of aiOpinions.entries()) {
-          logger.info(`   ${s}: ${dirLabel(d.direction)} — ${d.reason}`);
+        for (const [s, d] of aiResult.signals.entries()) {
+          logger.info(`   ${s}: 评分${d.score} — ${d.reason}`);
         }
-        // 注入 AI 理由到 summary
-        (report as any).aiReview = Array.from(aiOpinions.entries()).map(([s, d]) => ({
-          symbol: s, direction: d.direction, reason: d.reason,
-        }));
+      }
+      if (aiResult.positions.length > 0) {
+        const posAct = aiResult.positions.filter(p => p.action !== "hold");
+        for (const p of posAct) {
+          logger.warn(`🤖 AI 持仓建议: ${p.symbol} → ${p.action} ${p.closePercent ? p.closePercent+"%" : ""} — ${p.reason}`);
+        }
+      }
+      // 注入 AI 结果到前端
+      const aiReviewArr: any[] = [];
+      for (const [s, d] of aiResult.signals.entries()) {
+        aiReviewArr.push({ symbol: s, score: d.score, reason: d.reason });
+      }
+      (report as any).aiReview = aiReviewArr;
+      if (aiResult.positions.length > 0) {
+        (report as any).aiPositions = aiResult.positions;
       }
     }
 
@@ -411,6 +430,44 @@ async function aiDecisionCycle() {
           } catch (e: any) {
             updateDecisionStatus(decId, "failed");
             logger.error(`  部分平仓失败: ${e.message}`);
+          }
+        }
+      }
+    }
+
+    // 5b. AI 持仓管理（主动平仓建议）
+    if (aiResult?.positions) {
+      for (const aiPos of aiResult.positions) {
+        if (aiPos.action === "hold") continue;
+        const pos = positions.find(p => p.symbol === aiPos.symbol);
+        if (!pos) continue;
+        logger.warn(`🤖 AI 持仓建议: ${aiPos.symbol} → ${aiPos.action} — ${aiPos.reason}`);
+        const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === aiPos.symbol);
+        if (aiPos.action === "close" && pos.qty > 0) {
+          try {
+            await exchangeManager.closePosition(aiPos.symbol, pos.side, pos.qty);
+            peakPnlMap.delete(aiPos.symbol);
+            partialCloseMap.delete(aiPos.symbol);
+            openedThisSession.delete(aiPos.symbol);
+            if (dbTrade) closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close");
+            logger.warn(`  ✅ AI 主动平仓: ${aiPos.symbol}`);
+          } catch (e: any) {
+            logger.error(`  AI 平仓失败: ${e.message}`);
+          }
+        } else if (aiPos.action === "close_partial" && pos.qty > 0) {
+          const clsPct = aiPos.closePercent || 50;
+          const qty = Math.max(1, Math.floor(pos.qty * clsPct / 100));
+          try {
+            const closeResult = await exchangeManager.closePosition(aiPos.symbol, pos.side, qty);
+            if (dbTrade) {
+              const pnl = closeResult.avgPrice > 0
+                ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * qty
+                : 0;
+              updatePartialClose(dbTrade.id, clsPct, qty, pnl);
+              logger.warn(`  ✅ AI 部分平仓: ${aiPos.symbol} ${qty}张`);
+            }
+          } catch (e: any) {
+            logger.error(`  AI 部分平仓失败: ${e.message}`);
           }
         }
       }
@@ -495,13 +552,20 @@ async function aiDecisionCycle() {
           continue;
         }
 
-        // AI 方向复核
-        if (aiOpinions && aiOpinions.get(trade.symbol)?.direction === "disagree") {
-          const msg = `⏭️ ${trade.symbol} AI 不认同方向，跳过`;
-          tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: aiOpinions.get(trade.symbol)?.reason || "AI 不认同" });
+        // AI 评分过滤：0-40跳过，40-70半仓，70+全仓
+        const aiScore = aiResult?.signals.get(trade.symbol)?.score ?? 70;
+        if (aiScore < 40) {
+          const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "评分不足";
+          const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<40，跳过 (${aiRsn})`;
+          tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI评分${aiScore}: ${aiRsn}` });
           logger.info(msg);
           execLog.push(msg);
           continue;
+        }
+        if (aiScore < 70) {
+          // 半仓：仓位砍半
+          trade.amountPercent = Math.round(trade.amountPercent / 2);
+          logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位减半至${trade.amountPercent}%`);
         }
 
         // 方向分散限制：同方向持仓不超过 5 个

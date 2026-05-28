@@ -226,20 +226,19 @@ async function refresh(){
           const res = tradeRes.find((r) => r.symbol === t.symbol);
           if(res && res.status === "opened"){
             const dirLabel = res.side === "long" ? "做多" : "做空";
+            const score = ai ? ai.score : 70;
             html+=`<div style="font-size:16px;margin-left:8px;color:${res.side==="long"?"#3fb950":"#f85149"}">${res.symbol}: ${dirLabel} ${res.leverage}x ✅ 已开仓 ${res.qty}张 @$${typeof res.price==="number"?res.price.toFixed(res.price>100?0:4):res.price}</div>`;
-            if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
+            if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ✅ 评分${score} ${ai.reason||""}</div>`;
           } else if(res && res.status === "ai_rejected"){
             html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
             html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ❌ ${res.reason||ai?.reason||""}</div>`;
-          } else if(ai && ai.direction === "disagree"){
-            html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
-            html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ❌ ${ai.reason||""}</div>`;
-          } else if(res && res.status === "skipped"){
-            html+=`<div style="font-size:16px;margin-left:8px;color:#d2991d">${t.symbol}: ⏭️ ${res.reason||"未执行"}</div>`;
-            if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
           } else {
-            html+=`<div style="font-size:16px;margin-left:8px;color:#d2991d">${t.symbol}: — 未执行</div>`;
-            if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
+            // 其他——显示 AI 评分
+            const score = ai ? ai.score : 0;
+            const emoji = score >= 70 ? "✅" : score >= 40 ? "⚠️" : "❌";
+            const pctText = res && res.status === "opened" ? "" : (score < 40 ? " ❌ 评分不足" : score < 70 ? " ⚠️ 半仓" : "");
+            html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}${pctText}</div>`;
+            if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${emoji} 评分${score} ${ai.reason||""}</div>`;
           }
         }
       }
