@@ -48,9 +48,9 @@ td{padding:10px 12px;border-bottom:1px solid #21262d}
   <div class="card" style="flex:2 1 360px;min-width:260px"><h4>📈 权益曲线</h4><div style="position:relative"><canvas id="equityChart" style="width:100%;height:280px"></canvas><div id="chartTip" style="display:none;position:absolute;background:#1a1a2e;border:1px solid #3fb950;border-radius:4px;padding:2px 8px;font-size:13px;color:#3fb950;pointer-events:none;white-space:nowrap"></div></div></div>
 </div>
 <h3>实时持仓 <span id="ts"></span></h3>
-<table style="font-size:15px"><thead><tr><th class="num">时间</th><th>币种</th><th>方向</th><th class="num">杠杆</th><th class="num">开仓价</th><th class="num">标记价</th><th class="num">数量</th><th class="num">盈亏$</th><th class="num">盈亏%</th><th class="num">保证金</th></tr></thead><tbody id="pos-table"></tbody></table>
+<table style="font-size:15px"><thead><tr><th class="num">时间</th><th>币种</th><th>方向</th><th class="num">杠杆</th><th class="num">开仓价</th><th class="num">标记价</th><th class="num">数量</th><th class="num">盈亏$</th><th class="num">盈亏%</th><th class="num">保证金</th></tr></thead><tbody id="pos-table"><tr><td colspan="10" style="text-align:center;color:#8b949e;padding:20px">⏳ 加载中...</td></tr></tbody></table>
 <h3>AI 分析 <span id="cycle"></span></h3>
-<table><thead><tr><th>币种</th><th>趋势</th><th class="num">评分</th><th>1分</th><th>5分</th><th>15分</th><th>1时</th><th>1日</th><th>关键位</th></tr></thead><tbody id="ana-table"></tbody></table>
+<table><thead><tr><th>币种</th><th>趋势</th><th class="num">评分</th><th>1分</th><th>5分</th><th>15分</th><th>1时</th><th>1日</th><th>关键位</th></tr></thead><tbody id="ana-table"><tr><td colspan="9" style="text-align:center;color:#8b949e;padding:20px">⏳ 加载中...</td></tr></tbody></table>
 <div id="summary-box" class="summary-box"></div>
 <h3>交易记录 <span id="trade-count"></span></h3>
 <table style="font-size:15px"><thead><tr><th class="num">#</th><th class="num">时间</th><th>币种</th><th>方向</th><th class="num">杠杆</th><th class="num">开仓价</th><th class="num">数量</th><th class="num">价值</th><th class="num">保证金</th><th class="num">盈亏$</th><th class="num">盈亏%</th></tr></thead><tbody id="trade-table"></tbody></table>
@@ -348,7 +348,7 @@ async function refresh(){
   }
 }
 refresh();
-setInterval(refresh,8000);
+setInterval(refresh,4000);
 </script>
 </body>
 </html>
