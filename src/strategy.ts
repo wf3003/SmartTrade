@@ -163,22 +163,20 @@ export async function generateStrategyReport(
       rl = regime;
       re = `已有持仓或等信号`;
     }
+    // 超涨/超跌检查（在 a.push 前执行，确保 summary 正确显示）
+    const atrMult = Math.abs(maDist) / Math.max(at, 0.01);
+    const isShort = sig === "sell";
+    if (sig !== "hold" && ((isShort && maDist < 0 && atrMult >= 3 && i1.rsi14 < 30) ||
+        (!isShort && maDist > 0 && atrMult >= 3 && i1.rsi14 > 70))) {
+      sig = "hold";
+      re = `${regime}/${isShort?"超跌反弹":"超涨回调"}风险(偏离${Math.abs(maDist).toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${i1.rsi14.toFixed(0)})`;
+      cf = 0;
+    }
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
     const td = regime === "纯震荡"
       ? "纯震荡不开仓"
       : `${regime}/回踩1h${entryMaName}`;
     a.push({ symbol: sym, regime: rl, score: sc, trend: sig === "buy" ? "bullish" : sig === "sell" ? "bearish" : "neutral", strength: Math.abs(sc) >= 7 ? "strong" : Math.abs(sc) >= 4 ? "moderate" : "weak", keyLevels: kl, summary: re, analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: adxDesc(id.adx) });
-    if (sig !== "hold") {
-      // 超涨/超跌检查：偏离 3 ATR 以上 + RSI 极端 → 禁止同方向开仓
-      const atrMult = Math.abs(maDist) / Math.max(at, 0.01);
-      const isShort = sig === "sell";
-      if ((isShort && maDist < 0 && atrMult >= 3 && i1.rsi14 < 30) ||
-          (!isShort && maDist > 0 && atrMult >= 3 && i1.rsi14 > 70)) {
-        sig = "hold";
-        re = `${regime}/${isShort?"超跌反弹":"超涨回调"}风险(偏离${Math.abs(maDist).toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${i1.rsi14.toFixed(0)}), 禁止开仓并考虑平仓`;
-        cf = 0;
-      }
-    }
     if (sig !== "hold") {
       // 按行情类型动态计算杠杆
       let leverageMult = 1.0;
