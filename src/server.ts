@@ -31,8 +31,10 @@ export async function startServer(host?: string, port?: number) {
   app.get("/api/status", async (req, res) => {
     try {
       // 使用缓存数据，不阻塞各交易所 API（策略周期已在拉 K 线）
-      const account = cachedAccount.totalEquity ? cachedAccount : await exchangeManager.getAccount().catch(() => cachedAccount);
-      const positions = cachedPositions.length ? cachedPositions : await exchangeManager.getPositions().catch(() => cachedPositions);
+      const fetchWithTimeout = <T>(p: Promise<T>, fallback: T, ms = 3000): Promise<T> =>
+        Promise.race([p, new Promise<T>(r => setTimeout(() => r(fallback), ms))]);
+      const account = cachedAccount.totalEquity ? cachedAccount : await fetchWithTimeout(exchangeManager.getAccount(), cachedAccount);
+      const positions = cachedPositions.length ? cachedPositions : await fetchWithTimeout(exchangeManager.getPositions(), cachedPositions);
 
       // 并行获取全币种行情（5秒缓存防限频）
       const now = Date.now();
