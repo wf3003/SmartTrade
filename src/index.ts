@@ -270,7 +270,7 @@ async function monitorPositions() {
 
     // 账户快照（每 60 秒只存一次，减少写库频率）
     const now = Date.now();
-    if (!lastSnapshotTime || now - lastSnapshotTime > 60000) {
+    if (!lastSnapshotTime || now - lastSnapshotTime > 10000) {
       insertSnapshot({
         time: new Date().toISOString(),
         total_equity: account.totalEquity,
