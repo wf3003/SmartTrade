@@ -255,7 +255,7 @@ async function refresh(){
     try{
     const eq = d.equityHistory || [];
     const ec = document.getElementById("equityChart");
-    if (!ec || eq.length < 2) { if(ec)ec.style.display="none"; return; }
+    if (!ec || eq.length < 2) { if(ec)ec.style.display="none"; } else {
     ec.style.display="";
     const initial = d.config.initialBalance || 6300;
     const data = eq.map(e => e.equity);
@@ -332,7 +332,7 @@ async function refresh(){
       tip.style.left = (rightSide ? px - tip.offsetWidth - 10 : px + 10) + "px";
       tip.style.top = (py - 10) + "px";
     };
-    }catch(e){}
+    } }catch(e){}
     // decisions (已移除表格，保留变量以备后用)
 
     // trades
