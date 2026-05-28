@@ -1,5 +1,5 @@
 /**
- * AI 交易复盘 — 定时分析历史交易，输出改进建议
+ * AI 交易复盘 — 定时分析历史交易，深度输出改进建议
  */
 import OpenAI from "openai";
 import { CONFIG } from "./config";
@@ -11,7 +11,7 @@ const openai = new OpenAI({
 
 export async function aiTradeReview(
   tradeSummary: string,
-  decisionStats: string,
+  symbolStats: string,
   strategyConfig: string,
 ): Promise<string> {
   if (!tradeSummary) return "";
@@ -21,19 +21,20 @@ export async function aiTradeReview(
 【策略配置】
 ${strategyConfig}
 
-【近期交易】
+【逐笔交易明细】
 ${tradeSummary}
 
-【决策统计】
-${decisionStats}
+【按币种分组统计】
+${symbolStats}
 
-请以 JSON 格式输出你的分析：
+请以 JSON 格式输出分析：
 {
   "summary": "一句话总结近期表现",
-  "winners": ["胜率高的信号类型"],
-  "losers": ["亏损的信号类型"],
+  "winners": [{"signal":"信号类型","reason":"为什么赚钱"}],
+  "losers": [{"signal":"信号类型","reason":"为什么亏"}],
+  "bySymbol": [{"symbol":"BTC/USDT","analysis":"表现分析"}],
   "suggestions": ["具体优化建议"],
-  "paramsChange": {"建议改的参数": "建议新值"}
+  "blockSignals": "哪些信号应该禁止？为什么？"
 }`;
 
   try {
@@ -41,7 +42,7 @@ ${decisionStats}
       model: CONFIG.ai.model,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
-      max_tokens: 1500,
+      max_tokens: 2000,
       response_format: { type: "json_object" },
     });
 
@@ -53,15 +54,30 @@ ${decisionStats}
   }
 }
 
-/** 构建交易摘要供 AI 分析 */
 export function buildTradeSummary(trades: any[]): string {
-  if (!trades || trades.length === 0) return "无交易";
-  const closed = trades.filter((t: any) => t.status === "closed");
-  const lines: string[] = [];
-  for (const t of closed) {
+  if (!trades || trades.length === 0) return "";
+  return trades.map((t: any) => {
     const pnl = t.pnl || 0;
-    const emoji = pnl >= 0 ? "✅" : "❌";
-    lines.push(`${emoji} ${t.symbol} ${t.side} ${t.leverage}x | PnL:$${pnl.toFixed(2)} (${(t.pnl_pct||0).toFixed(1)}%) | ${t.close_type || ""} | ${(t.reason||"").slice(0, 60)}`);
+    const e = pnl >= 0 ? "✅" : "❌";
+    const peak = t.peak_pnl_pct ? `峰值${t.peak_pnl_pct.toFixed(1)}%` : "";
+    const reason = (t.reason||"").slice(0,80);
+    return `${e} ${t.symbol} ${t.side} ${t.leverage}x | 盈亏:$${pnl.toFixed(2)} (${(t.pnl_pct||0).toFixed(1)}%) ${peak} | ${t.close_type||""} | ${reason}`;
+  }).join("\n");
+}
+
+export function buildSymbolStats(trades: any[]): string {
+  if (!trades) return "";
+  const map: Record<string, {pnl:number; w:number; l:number; ct:string[]}> = {};
+  for (const t of trades) {
+    if (t.status !== "closed") continue;
+    const s = t.symbol;
+    if (!map[s]) map[s] = {pnl:0, w:0, l:0, ct:[]};
+    map[s].pnl += t.pnl||0;
+    (t.pnl||0) >= 0 ? map[s].w++ : map[s].l++;
+    if (t.close_type) map[s].ct.push(t.close_type);
   }
-  return lines.join("\n");
+  return Object.entries(map).map(([sym, s]) => {
+    const t = s.w+s.l, wr = t>0?(s.w/t*100).toFixed(0):"0";
+    return `${sym}: ${s.w}胜${s.l}负(${wr}%) 净盈亏:$${s.pnl.toFixed(2)} | 出场:${[...new Set(s.ct)].join(",")}`;
+  }).join("\n");
 }

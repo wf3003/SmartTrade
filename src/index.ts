@@ -14,7 +14,7 @@ import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calc
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, setCacheData } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
-import { aiTradeReview, buildTradeSummary } from "./ai-review";
+import { aiTradeReview, buildTradeSummary, buildSymbolStats } from "./ai-review";
 import { 
   db, 
   getOpenPositions,
@@ -609,9 +609,9 @@ async function aiDecisionCycle() {
     if (aiCycleNumber % 72 === 0 && aiCycleNumber > 0) {
       const allTrades = getTradesHistory(7) as any[];
       const tradeSummary = buildTradeSummary(allTrades);
+      const symbolStats = buildSymbolStats(allTrades);
       const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:5-10% 跟踪:1.5%/0.6%`;
-      const decStats = `本周信号:${report.newTrades.length}个 已开仓:${positions.length}个`;
-      const review = await aiTradeReview(tradeSummary, decStats, configStr);
+      const review = await aiTradeReview(tradeSummary, symbolStats, configStr);
       if (review) {
         logger.info(`📊 AI 交易复盘:\n${review}`);
         (report as any).aiReviewSummary = review;
