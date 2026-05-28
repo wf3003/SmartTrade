@@ -199,10 +199,25 @@ async function refresh(){
 
     // summary
     const sm=(d.fullReport||{}).summary||"";
+    const posCmds=(d.fullReport||{}).positions||[];
+    const newTrades=(d.fullReport||{}).newTrades||[];
     const exe=(d.fullReport||{}).execution||{};
     const logs=(exe.log||[]);
-    if(sm){
-      let html='<div style="color:#d2991d;font-weight:600;font-size:16px;margin-bottom:6px">最终决策</div><div style="color:#3fb950;font-size:15px;line-height:1.5">'+sm+'</div>';
+    if(sm || posCmds.length || newTrades.length){
+      let html='<div style="color:#d2991d;font-weight:600;font-size:16px;margin-bottom:8px">最终决策</div>';
+      if(sm) html+='<div style="color:#3fb950;font-size:15px;line-height:1.5;margin-bottom:8px">'+sm+'</div>';
+      if(posCmds.length){
+        html+='<div style="margin-bottom:6px;font-size:14px;color:#8b949e">📋 持仓指令:</div>';
+        for(const p of posCmds){
+          html+=`<div style="font-size:13px;margin-left:8px;color:#c9d1d9">${p.symbol}: ${p.action} — ${p.reason||""}</div>`;
+        }
+      }
+      if(newTrades.length){
+        html+='<div style="margin-top:6px;margin-bottom:6px;font-size:14px;color:#8b949e">📊 交易信号:</div>';
+        for(const t of newTrades){
+          html+=`<div style="font-size:13px;margin-left:8px;color:${t.action==="buy"?"#3fb950":"#f85149"}">${t.symbol}: ${t.action==="buy"?"做多":"做空"} ${t.leverage}x — ${t.reason||""}</div>`;
+        }
+      }
       if(logs.length){
         html+='<div style="margin-top:8px;border-top:1px solid #30363d;padding-top:6px;font-size:13px;line-height:1.5">';
         for(const l of logs) html+=`<div style="color:#8b949e">${l}</div>`;
@@ -212,8 +227,8 @@ async function refresh(){
       $("summary-box").style.display="block";
     }else{$("summary-box").style.display="none"}
 
-    // decisions
-    const decs=d.recentDecisions||[];
+    // decisions (不显示持仓hold记录)
+    const decs=(d.recentDecisions||[]).filter(dd => !(dd.signal||"").startsWith("pos-"));
     if(decs.length===0){
       $("dec-table").innerHTML='<tr><td colspan="8" style="text-align:center;color:#8b949e;padding:20px">暂无决策</td></tr>';
     }else{
