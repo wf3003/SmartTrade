@@ -457,12 +457,14 @@ async function aiDecisionCycle() {
         ...openedThisSession,
       ]);
       let openedThisCycle = 0;
+      const tradeResults: any[] = (report as any).tradeResults = [];
       for (const trade of report.newTrades) {
-        if (openedThisCycle >= MAX_NEW_PER_CYCLE) { logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
+        if (openedThisCycle >= MAX_NEW_PER_CYCLE) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "每周期开仓已达上限" }); logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
         if (trade.action === "hold") continue;
         const regime = (trade as any).regime || "";
         const regimeThreshold = regime.startsWith("强趋势") ? 0.35 : regime.startsWith("弱趋势") ? 0.40 : regime.includes("震荡") ? 0.55 : 0.80;
         if ((trade.confidence || 0) < regimeThreshold) { 
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `信心度不足(${((trade.confidence||0)*100).toFixed(0)}%<${(regimeThreshold*100).toFixed(0)}%)` });
           const msg = `⏭️ ${trade.symbol} 信心度${((trade.confidence||0)*100).toFixed(0)}% < ${(regimeThreshold*100).toFixed(0)}%(${regime||"-"}) 跳过`;
           logger.info(msg);
           execLog.push(msg);
@@ -476,11 +478,12 @@ async function aiDecisionCycle() {
           updateDecisionStatus(skipId, "skipped");
           continue; 
         }
-        if (existingSymbols.has(trade.symbol)) { logger.info(`已有 ${trade.symbol} 持仓，跳过`); continue; }
-        if (existingSymbols.size >= CONFIG.maxPositions) { logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
+        if (existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "已有持仓" }); logger.info(`已有 ${trade.symbol} 持仓，跳过`); continue; }
+        if (existingSymbols.size >= CONFIG.maxPositions) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
         // 止损冷却检查：该币种刚被止损，暂停指定分钟数
         if (stopCooldown.has(trade.symbol) && Date.now() - (stopCooldown.get(trade.symbol)||0) < STOP_COOLDOWN_MINUTES * 60000) {
           const mins = Math.ceil((STOP_COOLDOWN_MINUTES * 60000 - (Date.now() - (stopCooldown.get(trade.symbol)||0))) / 60000);
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `止损冷却${mins}分钟` });
           logger.info(`⏸️ ${trade.symbol} 止损冷却中，${mins}分钟后恢复`);
           execLog.push(`cooldown:${trade.symbol}`);
           continue;
@@ -489,6 +492,7 @@ async function aiDecisionCycle() {
         // AI 方向复核
         if (aiOpinions && aiOpinions.get(trade.symbol)?.direction === "disagree") {
           const msg = `⏭️ ${trade.symbol} AI 不认同方向，跳过`;
+          tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: aiOpinions.get(trade.symbol)?.reason || "AI 不认同" });
           logger.info(msg);
           execLog.push(msg);
           continue;
@@ -500,6 +504,7 @@ async function aiDecisionCycle() {
         const maxSameDir = 5;
         if (sameSideCount >= maxSameDir) {
           const msg = `⏭️ ${trade.symbol} 同方向已达${sameSideCount}/${maxSameDir}，分散风险跳过`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `同方向已达${sameSideCount}个` });
           logger.info(msg);
           execLog.push(msg);
           continue;
@@ -542,8 +547,7 @@ async function aiDecisionCycle() {
             entry_fee: openResult.fee || 0,
           });
           logger.warn(`✅ 开仓: ${trade.symbol} ${side} ${qty}张 @$${fillPrice} ${trade.leverage}x`);
-          if (!(report as any).openResults) (report as any).openResults = [];
-          (report as any).openResults.push({ symbol: trade.symbol, side, qty, price: fillPrice, leverage: trade.leverage });
+          tradeResults.push({ symbol: trade.symbol, status: "opened", side, qty, price: fillPrice, leverage: trade.leverage });
           existingSymbols.add(trade.symbol);
           openedThisSession.add(trade.symbol);
           openedThisCycle++;
@@ -552,6 +556,7 @@ async function aiDecisionCycle() {
           await new Promise(r => setTimeout(r, 1500));
         } catch (e: any) {
           updateDecisionStatus(decId, "failed");
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `开仓失败: ${e.message?.slice(0,40)||"未知"}` });
           logger.error(`开仓失败: ${e.message}`);
         }
       }
