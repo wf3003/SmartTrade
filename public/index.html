@@ -279,13 +279,17 @@ async function refresh(){
       const y = mT + ph - ph * i / steps;
       ctx.fillText("$"+v.toFixed(0), 6, y+3);
     }
-    // 曲线
+    // 曲线（平滑）
     ctx.beginPath();
-    for (let i = 0; i < data.length; i++) {
-      const x = dotX(i), y = dotY(data[i]);
-      i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    const pts = data.map((v,i) => ({x: dotX(i), y: dotY(v)}));
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const xc = (pts[i].x + pts[i+1].x) / 2;
+      const yc = (pts[i].y + pts[i+1].y) / 2;
+      ctx.quadraticCurveTo(pts[i].x, pts[i].y, xc, yc);
     }
-    ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
+    ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
     ctx.lineTo(dotX(data.length-1), mT+ph); ctx.lineTo(dotX(0), mT+ph); ctx.closePath();
     ctx.fillStyle = "rgba(63,185,80,0.08)"; ctx.fill();
     // X轴时间（均匀取6个）
