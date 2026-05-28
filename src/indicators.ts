@@ -44,14 +44,15 @@ function calcBB(data: number[], p: number, m: number) {
   return { bbMiddle: mean, bbUpper: mean + std * m, bbLower: mean - std * m };
 }
 function calcADX(high: number[], low: number[], close: number[], p: number): number {
-  let dxSum = 0, dxCount = 0;
+  const dxValues: number[] = [];
   for (let i = 1; i < high.length; i++) {
     const up = high[i] - high[i - 1], down = low[i - 1] - low[i];
     const dmP = up > down && up > 0 ? up : 0, dmM = down > up && down > 0 ? down : 0;
     const tr = Math.max(high[i] - low[i], Math.abs(high[i] - close[i - 1]), Math.abs(low[i] - close[i - 1]));
     if (tr === 0) continue;
     const dx = Math.abs(dmP - dmM) / (dmP + dmM || 1) * 100;
-    if (dxCount >= p) { dxSum -= dxSum / p; dxSum += dx; } else { dxSum += dx; dxCount++; }
+    dxValues.push(dx);
   }
-  return dxCount > 0 ? dxSum / dxCount : 20;
+  if (dxValues.length < p) return 20;
+  return dxValues.slice(-p).reduce((a, b) => a + b, 0) / p;
 }

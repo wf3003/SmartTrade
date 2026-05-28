@@ -169,6 +169,7 @@ export async function generateStrategyReport(
     if (sig !== "hold" && ((isShort && maDist < 0 && atrMult >= 3 && i1.rsi14 < 30) ||
         (!isShort && maDist > 0 && atrMult >= 3 && i1.rsi14 > 70))) {
       sig = "hold";
+      sc = 0;
       re = `${regime}/${isShort?"超跌反弹":"超涨回调"}风险(偏离${Math.abs(maDist).toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${i1.rsi14.toFixed(0)})`;
       cf = 0;
     }
