@@ -257,6 +257,7 @@ async function refresh(){
     const ec = document.getElementById("equityChart");
     if (!ec || eq.length < 2) { if(ec)ec.style.display="none"; return; }
     ec.style.display="";
+    const initial = d.config.initialBalance || 6300;
     const data = eq.map(e => e.equity);
     const labels = eq.map(e => new Date(e.time).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
     const min = Math.min(...data), max = Math.max(...data);
@@ -278,6 +279,15 @@ async function refresh(){
       const v = rMin + (rMax - rMin) * i / steps;
       const y = mT + ph - ph * i / steps;
       ctx.fillText("$"+v.toFixed(0), 6, y+3);
+    }
+    // 初始资金参考线
+    const initY = dotY(initial);
+    if (initY >= mT && initY <= mT+ph) {
+      ctx.setLineDash([4,4]); ctx.strokeStyle = "#d2991d"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(mL, initY); ctx.lineTo(w-mR, initY); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#d2991d"; ctx.font = "10px sans-serif"; ctx.textAlign = "left";
+      ctx.fillText("$"+initial.toFixed(0)+" 初值", mL+4, initY-2);
     }
     // 曲线（平滑）
     ctx.beginPath();
