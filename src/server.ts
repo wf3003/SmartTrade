@@ -65,8 +65,8 @@ export async function startServer(host?: string, port?: number) {
       const trades = allTrades.filter(t => t.status === 'open' || t.status === 'closed');
 
       const equityHistory = (db.prepare(
-        `SELECT time, total_equity FROM account_snapshots ORDER BY time ASC LIMIT 200`
-      ).all() as any[]).map((r: any) => ({ time: r.time, equity: r.total_equity }));
+        `SELECT time, total_equity FROM account_snapshots ORDER BY id DESC LIMIT 200`
+      ).all() as any[]).reverse().map((r: any) => ({ time: r.time, equity: r.total_equity }));
 
       res.json({
         ok: true,
