@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SmartTrade</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px;font-size:18px}
@@ -42,13 +43,12 @@ td{padding:10px 12px;border-bottom:1px solid #21262d}
 </div>
 <div id="error-box"></div>
 <div class="grid" id="cards"></div>
+<div class="card" style="margin-bottom:16px;max-width:100%"><h4>📈 权益曲线</h4><canvas id="equityChart" height="180"></canvas></div>
 <h3>实时持仓 <span id="ts"></span></h3>
 <table style="font-size:15px"><thead><tr><th class="num">时间</th><th>币种</th><th>方向</th><th class="num">杠杆</th><th class="num">开仓价</th><th class="num">标记价</th><th class="num">数量</th><th class="num">盈亏$</th><th class="num">盈亏%</th><th class="num">保证金</th></tr></thead><tbody id="pos-table"></tbody></table>
 <h3>AI 分析 <span id="cycle"></span></h3>
 <table><thead><tr><th>币种</th><th>趋势</th><th class="num">评分</th><th>1分</th><th>5分</th><th>15分</th><th>1时</th><th>1日</th><th>关键位</th></tr></thead><tbody id="ana-table"></tbody></table>
 <div id="summary-box" class="summary-box"></div>
-<h3>AI 决策</h3>
-<table><thead><tr><th>时间</th><th>币种</th><th>操作</th><th class="num">杠杆</th><th class="num">仓位%</th><th class="num">置信度</th><th>状态</th><th>原因</th></tr></thead><tbody id="dec-table"></tbody></table>
 <h3>交易记录 <span id="trade-count"></span></h3>
 <table style="font-size:15px"><thead><tr><th class="num">#</th><th class="num">时间</th><th>币种</th><th>方向</th><th class="num">杠杆</th><th class="num">开仓价</th><th class="num">数量</th><th class="num">价值</th><th class="num">保证金</th><th class="num">盈亏$</th><th class="num">盈亏%</th></tr></thead><tbody id="trade-table"></tbody></table>
 <div id="history-area" style="margin-top:20px">
@@ -204,17 +204,17 @@ async function refresh(){
     const exe=(d.fullReport||{}).execution||{};
     const logs=(exe.log||[]);
     if(sm || posCmds.length || newTrades.length){
-      let html='<div style="color:#d2991d;font-weight:600;font-size:16px;margin-bottom:8px">最终决策</div>';
-      if(sm) html+='<div style="color:#3fb950;font-size:14px;line-height:1.5;margin-bottom:8px">'+sm+'</div>';
+      let html='<div style="color:#d2991d;font-weight:600;font-size:18px;margin-bottom:8px">最终决策</div>';
+      if(sm) html+='<div style="color:#3fb950;font-size:16px;line-height:1.5;margin-bottom:8px">'+sm+'</div>';
       const nonHoldCmds = posCmds.filter(p => p.action !== "hold");
       if(nonHoldCmds.length){
-        html+='<div style="margin-bottom:6px;font-size:14px;color:#8b949e">📋 持仓指令:</div>';
+        html+='<div style="margin-bottom:6px;font-size:16px;color:#8b949e">📋 持仓指令:</div>';
         for(const p of nonHoldCmds){
-          html+=`<div style="font-size:14px;margin-left:8px;color:#d2991d">${p.symbol}: ${p.action} — ${p.reason||""}</div>`;
+          html+=`<div style="font-size:16px;margin-left:8px;color:#d2991d">${p.symbol}: ${p.action} — ${p.reason||""}</div>`;
         }
       }
       if(newTrades.length){
-        html+='<div style="margin-top:6px;margin-bottom:6px;font-size:14px;color:#8b949e">📊 交易信号:</div>';
+        html+='<div style="margin-top:6px;margin-bottom:6px;font-size:16px;color:#8b949e">📊 交易信号:</div>';
         const aiReview = (d.fullReport||{}).aiReview||[];
         const tradeRes = (d.fullReport||{}).tradeResults||[];
         for(const t of newTrades){
@@ -222,20 +222,20 @@ async function refresh(){
           const res = tradeRes.find((r) => r.symbol === t.symbol);
           if(res && res.status === "opened"){
             const dirLabel = res.side === "long" ? "做多" : "做空";
-            html+=`<div style="font-size:14px;margin-left:8px;color:${res.side==="long"?"#3fb950":"#f85149"}">${res.symbol}: ${dirLabel} ${res.leverage}x ✅ 已开仓 ${res.qty}张 @$${typeof res.price==="number"?res.price.toFixed(res.price>100?0:4):res.price}</div>`;
-            if(ai) html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
+            html+=`<div style="font-size:16px;margin-left:8px;color:${res.side==="long"?"#3fb950":"#f85149"}">${res.symbol}: ${dirLabel} ${res.leverage}x ✅ 已开仓 ${res.qty}张 @$${typeof res.price==="number"?res.price.toFixed(res.price>100?0:4):res.price}</div>`;
+            if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
           } else if(res && res.status === "ai_rejected"){
-            html+=`<div style="font-size:14px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
-            html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ❌ ${res.reason||ai?.reason||""}</div>`;
+            html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
+            html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ❌ ${res.reason||ai?.reason||""}</div>`;
           } else if(ai && ai.direction === "disagree"){
-            html+=`<div style="font-size:14px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
-            html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ❌ ${ai.reason||""}</div>`;
+            html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
+            html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ❌ ${ai.reason||""}</div>`;
           } else if(res && res.status === "skipped"){
-            html+=`<div style="font-size:14px;margin-left:8px;color:#d2991d">${t.symbol}: ⏭️ ${res.reason||"未执行"}</div>`;
-            if(ai) html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
+            html+=`<div style="font-size:16px;margin-left:8px;color:#d2991d">${t.symbol}: ⏭️ ${res.reason||"未执行"}</div>`;
+            if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
           } else {
-            html+=`<div style="font-size:14px;margin-left:8px;color:#d2991d">${t.symbol}: — 未执行</div>`;
-            if(ai) html+=`<div style="font-size:13px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
+            html+=`<div style="font-size:16px;margin-left:8px;color:#d2991d">${t.symbol}: — 未执行</div>`;
+            if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${ai.direction==="agree"?"✅":"➖"} ${ai.reason||""}</div>`;
           }
         }
       }
@@ -248,18 +248,7 @@ async function refresh(){
       $("summary-box").style.display="block";
     }else{$("summary-box").style.display="none"}
 
-    // decisions (不显示持仓hold记录)
-    const decs=(d.recentDecisions||[]).filter(dd => !(dd.signal||"").startsWith("pos-"));
-    if(decs.length===0){
-      $("dec-table").innerHTML='<tr><td colspan="8" style="text-align:center;color:#8b949e;padding:20px">暂无决策</td></tr>';
-    }else{
-      $("dec-table").innerHTML=decs.slice(0,20).map(dd=>{
-        const a=dd.action||"hold";
-        const bc=a==="buy"?"long-badge":a==="sell"?"short-badge":a==="close"||a==="close_partial"?"close-badge":"hold-badge";
-        const s = dd.status||"pending";
-        return `<tr><td>${dt(dd.time)}</td><td>${dd.symbol||"-"}</td><td><span class="badge ${bc}">${lb[a]||a}</span></td><td class="num">${dd.leverage||"-"}x</td><td class="num">${dd.amount||"-"}%</td><td class="num">${sa((dd.confidence||0)*100,0)}%</td><td style="color:${stColor[s]};font-weight:600">${stLabel[s]}</td><td style="word-break:break-word;max-width:260px;font-size:14px;line-height:1.4">${dd.reason||""}</td></tr>`;
-      }).join("");
-    }
+    // decisions (已移除表格，保留变量以备后用)
 
     // trades
     const ts=(d.recentTrades||[]).map(t=>({...t,_sort:new Date(t.status==="closed"&&t.exit_time?t.exit_time:t.entry_time).getTime()})).sort((a,b)=>b._sort-a._sort);
@@ -282,6 +271,34 @@ async function refresh(){
       }).join("");
     }
 
+    // 权益曲线
+    const eq = d.equityHistory || [];
+    if (eq.length > 1) {
+      const labels = eq.map(e => new Date(e.time).toLocaleTimeString("zh-CN", {hour:"2-digit",minute:"2-digit"}));
+      const data = eq.map(e => e.equity);
+      const initial = d.config.initialBalance || 0;
+      if (window._equityChart) { window._equityChart.data.labels = labels; window._equityChart.data.datasets[0].data = data; window._equityChart.update("none"); }
+      else {
+        const ctx = document.getElementById("equityChart");
+        if (ctx) {
+          window._equityChart = new Chart(ctx, {
+            type: "line",
+            data: {
+              labels,
+              datasets: [{
+                label: "净值", data, borderColor: "#3fb950", backgroundColor: "rgba(63,185,80,0.08)", fill: true,
+                pointRadius: 0, borderWidth: 2, tension: 0.3,
+              }],
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              scales: { x: { display: false }, y: { grid: { color: "#21262d" }, ticks: { color: "#8b949e", callback: v => "$"+v.toFixed(0) } } },
+              plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => "$"+ctx.parsed.y.toFixed(2) } } },
+            },
+          });
+        }
+      }
+    }
     document.title = `SmartTrade | 未实现盈亏 ${(a.unrealizedPnl||0)>=0?"+":""}$${sa(a.unrealizedPnl,2)}`;
     $("ts").textContent=new Date().toLocaleTimeString();
     if(d.cycle) $("cycle").textContent="#"+d.cycle.number+(d.cycle.time?" | "+new Date(d.cycle.time).toLocaleTimeString():"");
