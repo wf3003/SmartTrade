@@ -435,41 +435,13 @@ async function aiDecisionCycle() {
       }
     }
 
-    // 5b. AI 持仓管理（主动平仓建议）
+    // 5b. AI 持仓预警（仅提示，不自动平仓）
     if (aiResult?.positions) {
       for (const aiPos of aiResult.positions) {
         if (aiPos.action === "hold") continue;
         const pos = positions.find(p => p.symbol === aiPos.symbol);
         if (!pos) continue;
-        logger.warn(`🤖 AI 持仓建议: ${aiPos.symbol} → ${aiPos.action} — ${aiPos.reason}`);
-        const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === aiPos.symbol);
-        if (aiPos.action === "close" && pos.qty > 0) {
-          try {
-            await exchangeManager.closePosition(aiPos.symbol, pos.side, pos.qty);
-            peakPnlMap.delete(aiPos.symbol);
-            partialCloseMap.delete(aiPos.symbol);
-            openedThisSession.delete(aiPos.symbol);
-            if (dbTrade) closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close");
-            logger.warn(`  ✅ AI 主动平仓: ${aiPos.symbol}`);
-          } catch (e: any) {
-            logger.error(`  AI 平仓失败: ${e.message}`);
-          }
-        } else if (aiPos.action === "close_partial" && pos.qty > 0) {
-          const clsPct = aiPos.closePercent || 50;
-          const qty = Math.max(1, Math.floor(pos.qty * clsPct / 100));
-          try {
-            const closeResult = await exchangeManager.closePosition(aiPos.symbol, pos.side, qty);
-            if (dbTrade) {
-              const pnl = closeResult.avgPrice > 0
-                ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * qty
-                : 0;
-              updatePartialClose(dbTrade.id, clsPct, qty, pnl);
-              logger.warn(`  ✅ AI 部分平仓: ${aiPos.symbol} ${qty}张`);
-            }
-          } catch (e: any) {
-            logger.error(`  AI 部分平仓失败: ${e.message}`);
-          }
-        }
+        logger.warn(`🤖 AI 持仓预警: ${aiPos.symbol} → ${aiPos.action} — ${aiPos.reason}`);
       }
     }
 
