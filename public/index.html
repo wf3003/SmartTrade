@@ -272,33 +272,25 @@ async function refresh(){
     }
 
     // 权益曲线
+    try{
     const eq = d.equityHistory || [];
-    if (eq.length > 1) {
+    const ec = document.getElementById("equityChart");
+    if (ec && eq.length > 1 && typeof Chart !== "undefined") {
       const labels = eq.map(e => new Date(e.time).toLocaleTimeString("zh-CN", {hour:"2-digit",minute:"2-digit"}));
       const data = eq.map(e => e.equity);
-      const initial = d.config.initialBalance || 0;
       if (window._equityChart) { window._equityChart.data.labels = labels; window._equityChart.data.datasets[0].data = data; window._equityChart.update("none"); }
       else {
-        const ctx = document.getElementById("equityChart");
-        if (ctx) {
-          window._equityChart = new Chart(ctx, {
-            type: "line",
-            data: {
-              labels,
-              datasets: [{
-                label: "净值", data, borderColor: "#3fb950", backgroundColor: "rgba(63,185,80,0.08)", fill: true,
-                pointRadius: 0, borderWidth: 2, tension: 0.3,
-              }],
-            },
-            options: {
-              responsive: true, maintainAspectRatio: false,
-              scales: { x: { display: false }, y: { grid: { color: "#21262d" }, ticks: { color: "#8b949e", callback: v => "$"+v.toFixed(0) } } },
-              plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => "$"+ctx.parsed.y.toFixed(2) } } },
-            },
-          });
-        }
+        window._equityChart = new Chart(ec, {
+          type: "line",
+          data: { labels, datasets: [{ label: "净值", data, borderColor: "#3fb950", backgroundColor: "rgba(63,185,80,0.08)", fill: true, pointRadius: 0, borderWidth: 2, tension: 0.3 }] },
+          options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            scales: { x: { display: false }, y: { grid: { color: "#21262d" }, ticks: { color: "#8b949e", callback: v => "$"+v.toFixed(0) } } },
+            plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => "$"+ctx.parsed.y.toFixed(2) } } },
+          },
+        });
       }
-    }
+    }}catch(e){}
     document.title = `SmartTrade | 未实现盈亏 ${(a.unrealizedPnl||0)>=0?"+":""}$${sa(a.unrealizedPnl,2)}`;
     $("ts").textContent=new Date().toLocaleTimeString();
     if(d.cycle) $("cycle").textContent="#"+d.cycle.number+(d.cycle.time?" | "+new Date(d.cycle.time).toLocaleTimeString():"");
