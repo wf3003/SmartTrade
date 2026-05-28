@@ -256,8 +256,7 @@ async function refresh(){
     const ec = document.getElementById("equityChart");
     const eq = d.equityHistory || [];
     const initial = d.config.initialBalance || 6300;
-    if (!ec) return;
-    if (!eq || eq.length < 2) {
+    if (!ec) {} else if (!eq || eq.length < 2) {
       const curEq = d.account?.totalEquity || initial;
       eq.length = 0; eq.push({time:new Date(Date.now()-60000).toISOString(), equity: initial}, {time:new Date().toISOString(), equity: curEq});
     }
@@ -336,7 +335,7 @@ async function refresh(){
       tip.style.left = (rightSide ? px - tip.offsetWidth - 10 : px + 10) + "px";
       tip.style.top = (py - 10) + "px";
     };
-    } }catch(e){}
+    }catch(e){}
     // decisions (已移除表格，保留变量以备后用)
 
     // trades
