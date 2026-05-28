@@ -542,6 +542,8 @@ async function aiDecisionCycle() {
             entry_fee: openResult.fee || 0,
           });
           logger.warn(`✅ 开仓: ${trade.symbol} ${side} ${qty}张 @$${fillPrice} ${trade.leverage}x`);
+          if (!(report as any).openResults) (report as any).openResults = [];
+          (report as any).openResults.push({ symbol: trade.symbol, side, qty, price: fillPrice, leverage: trade.leverage });
           existingSymbols.add(trade.symbol);
           openedThisSession.add(trade.symbol);
           openedThisCycle++;

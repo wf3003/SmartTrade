@@ -216,12 +216,23 @@ async function refresh(){
       if(newTrades.length){
         html+='<div style="margin-top:6px;margin-bottom:6px;font-size:14px;color:#8b949e">📊 交易信号:</div>';
         const aiReview = (d.fullReport||{}).aiReview||[];
+        const openRes = (d.fullReport||{}).openResults||[];
         for(const t of newTrades){
-          html+=`<div style="font-size:13px;margin-left:8px;color:${t.action==="buy"?"#3fb950":"#f85149"}">${t.symbol}: ${t.action==="buy"?"做多":"做空"} ${t.leverage}x — ${t.reason||""}</div>`;
           const ai = aiReview.find((r:any) => r.symbol === t.symbol);
-          if(ai){
-            const emoji = ai.direction === "agree" ? "✅" : ai.direction === "disagree" ? "❌" : "➖";
-            html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ${emoji} ${ai.reason||""}</div>`;
+          const res = openRes.find((r:any) => r.symbol === t.symbol);
+          if(ai && ai.direction === "disagree"){
+            // AI 不认同，没有开仓结果
+            html+=`<div style="font-size:13px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
+            html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ❌ ${ai.reason||""}</div>`;
+          } else if(res){
+            // AI 认同，已开仓
+            const dirLabel = res.side === "long" ? "做多" : "做空";
+            html+=`<div style="font-size:13px;margin-left:8px;color:${res.side==="long"?"#3fb950":"#f85149"}">${res.symbol}: ${dirLabel} ${res.leverage}x ✅ 已开仓 ${res.qty}张 @$${res.price.toFixed?res.price.toFixed(res.price>100?0:4):res.price}</div>`;
+            if(ai) html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ✅ ${ai.reason||""}</div>`;
+          } else {
+            // AI 认同/不确定，但开仓未执行（被其他条件拦住）
+            html+=`<div style="font-size:13px;margin-left:8px;color:#d2991d">${t.symbol}: — 未执行</div>`;
+            if(ai) html+=`<div style="font-size:12px;margin-left:16px;color:#8b949e">  🤖 ➖ ${ai.reason||""}</div>`;
           }
         }
       }
