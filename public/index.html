@@ -243,12 +243,28 @@ async function refresh(){
           }
         }
       }
-      // 被拦截的信号（在分析中有评分但未进入交易信号）
-      const blocked = allAnalysis.filter(a => a.score !== 0 && !newTrades.some(t => t.symbol === a.symbol));
-      if(blocked.length){
-        html+='<div style="margin-top:6px;margin-bottom:6px;font-size:14px;color:#8b949e">⛔ 拦截:</div>';
-        for(const b of blocked){
-          html+=`<div style="font-size:14px;margin-left:8px;color:#d2991d">${b.symbol}: score${b.score} — ${b.summary||""}</div>`;
+      // 被拦截的信号：策略拦截 + 运行时跳过（止损冷却/信心不足等）
+      const tradeRes = (d.fullReport||{}).tradeResults||[];
+      const skippedResults = tradeRes.filter(r => r.status === "skipped");
+      const analysisSkipped = allAnalysis.filter(a =>
+        a.score !== 0 &&
+        !newTrades.some(t => t.symbol === a.symbol) &&
+        !skippedResults.some(r => r.symbol === a.symbol)
+      ).map(a => ({ symbol: a.symbol, reason: `score${a.score} — ${a.summary||""}` }));
+      const runtimeSkipped = skippedResults.map(r => ({ symbol: r.symbol, reason: r.reason || "" }));
+      const allSkipped = [...analysisSkipped, ...runtimeSkipped];
+      if(allSkipped.length){
+        const skippedSymbols = new Set(allSkipped.map(s => s.symbol));
+        const deduped = allSkipped.filter((s, i) => {
+          if (skippedSymbols.has(s.symbol)) {
+            skippedSymbols.delete(s.symbol);
+            return true;
+          }
+          return false;
+        });
+        html+='<div style="margin-top:6px;margin-bottom:6px;font-size:16px;color:#8b949e">⛔ 拦截:</div>';
+        for(const s of deduped){
+          html+=`<div style="font-size:16px;margin-left:8px;color:#d2991d">${s.symbol}: ${s.reason}</div>`;
         }
       }
       if(logs.length){

@@ -183,6 +183,11 @@ export async function generateStrategyReport(
       if (regime === "强趋势多" || regime === "强趋势空") leverageMult = 1.5;
       else if (regime === "弱趋势多" || regime === "弱趋势空") leverageMult = 0.7;
       else leverageMult = 0.4; // 震荡偏多/空
+      // 高波动币降杠杆：ATR > 0.8% 限制倍率上限，防止损截断后价格距离过小
+      //   ATR 1.15% × 1.2 × 9x = 12.42% → 截断到 10% → 实际 10% / 9x = 1.11% 就止损
+      //   降为 6x 后：ATR 1.15% × 1.2 × 6x = 8.28% → 实际 8.28% / 6x = 1.38%
+      const volMaxMult = at > 1.5 ? 0.7 : at > 0.8 ? 1.0 : 1.5;
+      leverageMult = Math.min(leverageMult, volMaxMult);
       const dynLeverage = Math.min(CONFIG.maxLeverage,
         Math.round(CONFIG.defaultLeverage * leverageMult)
       );
