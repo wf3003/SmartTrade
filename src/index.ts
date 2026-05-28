@@ -337,6 +337,9 @@ async function aiDecisionCycle() {
         const dirLabel = (d: string) => d === "agree" ? "认同" : d === "disagree" ? "不认同" : "不确定";
         const logStr = Array.from(aiOpinions.entries()).map(([s, d]) => `${s}:${dirLabel(d.direction)}`).join(" | ");
         logger.info(`🤖 AI 方向复核: ${logStr}`);
+        for (const [s, d] of aiOpinions.entries()) {
+          logger.info(`   ${s}: ${dirLabel(d.direction)} — ${d.reason}`);
+        }
         // 注入 AI 理由到 summary
         (report as any).aiReview = Array.from(aiOpinions.entries()).map(([s, d]) => ({
           symbol: s, direction: d.direction, reason: d.reason,
@@ -502,7 +505,7 @@ async function aiDecisionCycle() {
         // 方向分散限制：同方向持仓不超过 5 个
         const tradeSide = trade.action === "buy" ? "long" : "short";
         const sameSideCount = positions.filter(p => p.side === tradeSide).length;
-        const maxSameDir = 5;
+        const maxSameDir = 8; // 放宽方向限制
         if (sameSideCount >= maxSameDir) {
           const msg = `⏭️ ${trade.symbol} 同方向已达${sameSideCount}/${maxSameDir}，分散风险跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `同方向已达${sameSideCount}个` });
