@@ -395,8 +395,16 @@ async function aiDecisionCycle() {
         const analysis = report.analysis?.find((a: any) => a.symbol === sym);
         return `${sym}:$${t.price} RSI${rsi.toFixed(0)} ATR${atr.toFixed(2)}% ${analysis?.analysis_1d || ""} ${analysis?.summary ? ("| " + analysis.summary) : ""}`;
       }).join("\n");
+    // 持仓数据：合并交易所持仓 + 策略分析（让AI能基于趋势/RSI/策略判断该不该平仓）
     const posLines = positions.length > 0
-      ? positions.map(p => `${p.symbol} ${p.side} PnL:${(p.unrealizedPnlPct||0).toFixed(1)}% 杠杆${p.leverage}x`).join("\n")
+      ? positions.map(p => {
+          const analysis = report.analysis?.find((a: any) => a.symbol === p.symbol);
+          const atr = (atrCache.get(p.symbol) || 0.015) * 100;
+          const rsi = rsiCache.get(p.symbol) || 50;
+          const pc = report.positions?.find((c: any) => c.symbol === p.symbol);
+          const stratAdvice = pc && pc.action !== "hold" ? ` [策略建议:${pc.action} ${pc.reason}]` : "";
+          return `${p.symbol} ${p.side} PnL:${(p.unrealizedPnlPct||0).toFixed(1)}% 杠杆${p.leverage}x | RSI${rsi.toFixed(0)} ATR${atr.toFixed(1)}% | 趋势:${analysis?.trend||"?"}(${analysis?.strength||"?"})${stratAdvice}`;
+        }).join("\n")
       : "无";
     aiResult = await aiDirectionCheck(report.newTrades, tickerIndicators, posLines);
     if (aiResult) {
