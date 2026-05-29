@@ -57,7 +57,7 @@ export function resetDynamicParams() {
 /** 应用 AI 复盘建议 — 翻译为参数调整 */
 export function applyReviewSuggestions(suggestions: string[]): void {
   for (const s of suggestions) {
-    if (s.includes("降低杠杆")) {
+    if (s.includes("降低杠杆") || s.includes("杠杆上限") || s.includes("减少杠杆")) {
       leverageMult = Math.max(0.5, leverageMult - 0.15);
       logger.info(`⚙️ 复盘→降低杠杆: leverageMult=${leverageMult.toFixed(2)}`);
     }

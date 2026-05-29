@@ -420,6 +420,8 @@ async function aiDecisionCycle() {
         for (const p of posAct) {
           logger.warn(`🤖 AI 持仓建议: ${p.symbol} → ${p.action} ${p.closePercent ? p.closePercent+"%" : ""} — ${p.reason}`);
         }
+        const holdCnt = aiResult.positions.filter(p => p.action === "hold").length;
+        logger.info(`🤖 AI 持仓评估: ${aiResult.positions.length}个, ${posAct.length}个非hold, ${holdCnt}个hold`);
       }
       // 注入 AI 结果到前端
       const aiReviewArr: any[] = [];
