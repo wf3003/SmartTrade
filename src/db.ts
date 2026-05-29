@@ -285,3 +285,20 @@ export function insertAiReview(r: {
 export function getRecentAiReviews(limit: number = 5) {
   return db.prepare("SELECT * FROM ai_reviews ORDER BY id DESC LIMIT ?").all(limit);
 }
+
+// ========== 复盘反馈参数持久化 ==========
+// feedback_state 表: 单行 JSON 存储 symbolScoreMult / signalScorePenalty / 标量参数
+// 确保进程重启后反馈不丢失
+db.exec(`CREATE TABLE IF NOT EXISTS feedback_state (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)`);
+
+export function saveFeedbackState(data: string): void {
+  db.prepare(`
+    INSERT INTO feedback_state (id, data) VALUES (1, ?)
+    ON CONFLICT(id) DO UPDATE SET data = excluded.data
+  `).run(data);
+}
+
+export function loadFeedbackState(): string | null {
+  const row = db.prepare("SELECT data FROM feedback_state WHERE id = 1").get() as any;
+  return row?.data || null;
+}

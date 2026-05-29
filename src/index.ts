@@ -12,7 +12,7 @@ import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams } from "./state";
+import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats } from "./ai-review";
 import { 
@@ -71,6 +71,8 @@ process.on("uncaughtException", (err) => {
 });
 
 async function main() {
+  // 重启恢复复盘反馈参数（避免失忆）
+  await loadFeedbackFromDb();
   logger.info("=".repeat(50));
   logger.info("   SmartTrade — AI 多交易所合约交易系统");
   logger.info(`   监控: 每 ${MONITOR_INTERVAL / 1000}s | 策略决策: 每 ${DECISION_INTERVAL / 1000}s`);
@@ -779,6 +781,8 @@ async function scheduleReview(currentCycle: number) {
           applyReviewSuggestions(parsed.suggestions);
         }
         logger.info(`📊 复盘反馈已应用完成`);
+        // 持久化到数据库，防止进程重启丢失
+        saveFeedbackToDb().catch(() => {});
       } catch {}
       // 持久化到 DB
       const wins = allTrades.filter((t: any) => t.status === 'closed' && (t.pnl || 0) > 0).length;

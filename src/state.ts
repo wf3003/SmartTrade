@@ -143,3 +143,32 @@ export function getAdjustedStopLoss(baseStopLoss: number): number {
 export function getAdjustedConfidenceFloor(base: number): number {
   return Math.min(1, base + confidenceOffset);
 }
+
+// ===== 持久化：启动恢复 + 复盘后保存 =====
+
+export async function saveFeedbackToDb(): Promise<void> {
+  const { saveFeedbackState } = await import("./db");
+  const payload = JSON.stringify({
+    symbolScoreMult: Object.fromEntries(symbolScoreMult),
+    signalScorePenalty: Object.fromEntries(signalScorePenalty),
+    leverageMult,
+    stopLossMult,
+    confidenceOffset,
+  });
+  saveFeedbackState(payload);
+}
+
+export async function loadFeedbackFromDb(): Promise<void> {
+  const { loadFeedbackState } = await import("./db");
+  const raw = loadFeedbackState();
+  if (!raw) return;
+  try {
+    const data = JSON.parse(raw);
+    if (data.symbolScoreMult) for (const [k, v] of Object.entries(data.symbolScoreMult)) symbolScoreMult.set(k, v as number);
+    if (data.signalScorePenalty) for (const [k, v] of Object.entries(data.signalScorePenalty)) signalScorePenalty.set(k, v as number);
+    if (typeof data.leverageMult === "number") leverageMult = data.leverageMult;
+    if (typeof data.stopLossMult === "number") stopLossMult = data.stopLossMult;
+    if (typeof data.confidenceOffset === "number") confidenceOffset = data.confidenceOffset;
+    logger.info(`⚙️ 已恢复复盘反馈参数: leverageMult=${leverageMult.toFixed(2)} stopLossMult=${stopLossMult.toFixed(2)} symbolScoreMult=${symbolScoreMult.size}项`);
+  } catch {}
+}
