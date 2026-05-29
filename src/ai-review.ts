@@ -58,8 +58,10 @@ ${symbolStats}
     if (parsed.summary || parsed.winners || parsed.losers || parsed.suggestions) {
       return JSON.stringify(parsed, null, 2);
     }
+    console.log("[ai-review] 有响应但缺字段:", text.slice(0, 200));
     return "";
-  } catch {
+  } catch (e: any) {
+    console.log("[ai-review] 异常:", e.message?.slice(0, 200));
     return "";
   }
 }
