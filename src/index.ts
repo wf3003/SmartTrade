@@ -29,6 +29,7 @@ import {
   getOpenPositionPeakPnlMap,
   updatePeakPnlInDb,
   getTradesHistory,
+  insertAiReview,
 } from "./db";
 
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓
@@ -43,8 +44,17 @@ const partialCloseMap = new Map<string, number>();
 const newPositionTime = new Map<string, number>();
 // 止损平仓后冷却时间（防连续触发）
 const stopCooldown = new Map<string, number>();
+// 同一币种连续止损计数（递增惩罚）
+const consecutiveStopCount = new Map<string, number>();
 // 止损后暂停该币种交易的最小分钟数
 const STOP_COOLDOWN_MINUTES = 30;
+// 获取递增冷却时间（分钟）：第1次30分，第2次2h，第3次24h
+function getDynamicCooldown(symbol: string): number {
+  const cnt = consecutiveStopCount.get(symbol) || 0;
+  if (cnt >= 3) return 24 * 60;  // 当天不再开
+  if (cnt === 2) return 120;      // 2小时
+  return STOP_COOLDOWN_MINUTES;    // 30分钟
+}
 // 启动后等待 N 个周期再开新仓（让账户数据和 ATR 缓存稳定）
 const STARTUP_COOLDOWN_CYCLES = 1;
 // 每周期最多开 N 个新仓（按置信度排序后取头部）
@@ -56,7 +66,7 @@ async function main() {
   logger.info("=".repeat(50));
   logger.info("   SmartTrade — AI 多交易所合约交易系统");
   logger.info(`   监控: 每 ${MONITOR_INTERVAL / 1000}s | 策略决策: 每 ${DECISION_INTERVAL / 1000}s`);
-  logger.info(`   账户止损: $${CONFIG.accountStopLossUsdt} | 跟踪止盈: 1.5%/0.6%→3%/0.5%`);
+  logger.info(`   账户止损: $${CONFIG.accountStopLossUsdt} | 跟踪止盈: 0.8%/0.4%→2%/0.3%`);
   logger.info("=".repeat(50));
 
   await exchangeManager.init();
@@ -183,15 +193,12 @@ async function monitorPositions() {
         logger.warn(`⚠️ 超涨预警: ${pos.symbol} 偏离${extDelta.toFixed(1)}%×${extMult.toFixed(1)}ATR RSI${extRsi.toFixed(0)}, 谨防回调`);
       }
 
-      // 跟踪止盈：基于实际价格变化的 trailing stop
-      //   核心：pnlPct 已含杠杆，除以杠杆还原为实际价格涨跌幅
-      //   价格涨 ≥1.5% 时激活，保底 = 最高价格 - 0.6%
-      //   价格涨 ≥3% 时缩窄到 0.5%，保底 = 最高价格 - 0.5%
+      // 跟踪止盈：价格涨 ≥0.8% 激活（原1.5%），保底0.4%（原0.6%），涨≥2%缩到0.3%（原3%/0.5%）
       const trailLev = Math.max(pos.leverage || 1, 1);
       const pricePnl = pnlPct / trailLev;          // 当前实际价格涨跌%
       const peakPrice = peakPnl / trailLev;         // 历史最高价格涨跌%
-      if (peakPrice >= 1.5 && pos.qty > 0) {
-        const trailDist = peakPrice >= 3.0 ? 0.5 : 0.6;
+      if (peakPrice >= 0.8 && pos.qty > 0) {
+        const trailDist = peakPrice >= 2.0 ? 0.3 : 0.4;
         const floor = peakPrice - trailDist;
         if (pricePnl <= floor) {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 价格峰值${peakPrice.toFixed(2)}%→${pricePnl.toFixed(2)}% 回撤${(peakPrice-pricePnl).toFixed(2)}%≥${trailDist}% 平仓${pos.qty}张`);
@@ -213,6 +220,33 @@ async function monitorPositions() {
         }
       }
 
+      // 时间止损：持仓 > 4 小时且从未盈利且当前亏损 ≥ -2% → 平仓释放保证金
+      const posAgeHours = newPositionTime.has(pos.symbol)
+        ? (Date.now() - (newPositionTime.get(pos.symbol) || 0)) / 3600000
+        : 0;
+      if (posAgeHours > 4 && pnlPct <= -2 && peakPnl <= 0) {
+        logger.warn(`⏰ 时间止损: ${pos.symbol} 持仓${posAgeHours.toFixed(1)}h从未盈利, 亏损${pnlPct.toFixed(1)}%, 平仓释放保证金`);
+        try {
+          const closeResult = await exchangeManager.closePosition(pos.symbol, pos.side, pos.qty);
+          logger.warn(`  ✅ 时间止损平仓成功: ${pos.symbol} ${pos.qty}张`);
+          stopCooldown.set(pos.symbol, Date.now());
+          const cnt = (consecutiveStopCount.get(pos.symbol) || 0) + 1;
+          consecutiveStopCount.set(pos.symbol, cnt);
+          peakPnlMap.delete(key);
+          partialCloseMap.delete(pos.symbol);
+          closedThisCycle.add(pos.symbol);
+          openedThisSession.delete(pos.symbol);
+          if (dbTrade) {
+            const closeFee = closeResult.fee || 0;
+            closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
+              pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, closeFee, "time_stop");
+          }
+        } catch (e: any) {
+          logger.error(`时间止损平仓失败 ${pos.symbol}: ${e.message}`);
+        }
+        continue;
+      }
+
       // 止损检查：新开仓用宽止损 -15%，正常 ATR 动态止损
       if (stopCooldown.has(pos.symbol) && Date.now() - (stopCooldown.get(pos.symbol)||0) < 10000) continue; // 10秒冷却
       const atrVal = atrCache.get(pos.symbol) || 0.015;
@@ -224,7 +258,13 @@ async function monitorPositions() {
         try {
           const closeResult = await exchangeManager.closePosition(pos.symbol, pos.side, pos.qty);
           logger.warn(`  ✅ 止损平仓成功: ${pos.symbol} ${pos.qty}张`);
-          stopCooldown.set(pos.symbol, Date.now());
+          // 递增冷却
+          const cnt = (consecutiveStopCount.get(pos.symbol) || 0) + 1;
+          consecutiveStopCount.set(pos.symbol, cnt);
+          const dynMin = getDynamicCooldown(pos.symbol);
+          const dynMs = dynMin * 60000;
+          stopCooldown.set(pos.symbol, Date.now() + (dynMs > 30*60000 ? dynMs - 30*60000 : 0));
+          logger.warn(`  ⏸️ ${pos.symbol} 连续${cnt}次止损，下次冷却${dynMin}分钟`);
           peakPnlMap.delete(key);
           partialCloseMap.delete(pos.symbol);
           closedThisCycle.add(pos.symbol);
@@ -437,13 +477,52 @@ async function aiDecisionCycle() {
       }
     }
 
-    // 5b. AI 持仓预警（仅提示，不自动平仓）
+    // 5b. AI 主动平仓（智能执行）
+    //   条件：持仓 > 30分钟 + PnL > -5%（防开仓瞬间被AI关，防亏损过大的让止损处理）
     if (aiResult?.positions) {
       for (const aiPos of aiResult.positions) {
         if (aiPos.action === "hold") continue;
         const pos = positions.find(p => p.symbol === aiPos.symbol);
         if (!pos) continue;
-        logger.warn(`🤖 AI 持仓预警: ${aiPos.symbol} → ${aiPos.action} — ${aiPos.reason}`);
+        const posAge = newPositionTime.has(pos.symbol)
+          ? (Date.now() - (newPositionTime.get(pos.symbol) || 0)) / 60000
+          : 999;
+        const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === pos.symbol);
+        // 保护条件：持仓 < 30分钟 或 亏损超过 -5% → 只预警不平仓
+        if (posAge < 30 || (pos.unrealizedPnlPct || 0) < -5) {
+          logger.warn(`🤖 AI 预警: ${aiPos.symbol} → ${aiPos.action} ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${aiPos.reason} (${posAge<30?'太新':'亏损过大'}，仅提示)`);
+          continue;
+        }
+        // 执行平仓
+        try {
+          const qty = aiPos.action === "close_partial"
+            ? Math.ceil(pos.qty * (aiPos.closePercent || 50) / 100)
+            : pos.qty;
+          const closeResult = await exchangeManager.closePosition(aiPos.symbol, pos.side, qty);
+          logger.warn(`🤖 AI 平仓: ${aiPos.symbol} ${qty}张 — ${aiPos.reason}`);
+          peakPnlMap.delete(aiPos.symbol);
+          partialCloseMap.delete(aiPos.symbol);
+          openedThisSession.delete(aiPos.symbol);
+          if (dbTrade) {
+            const closeFee = closeResult.fee || 0;
+            if (aiPos.action === "close_partial") {
+              const newPct = (dbTrade.partial_close_pct || 0) + (aiPos.closePercent || 50);
+              const partialPnl = closeResult.avgPrice > 0
+                ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * qty
+                : 0;
+              updatePartialClose(dbTrade.id, newPct, qty, partialPnl);
+              if (newPct >= 100) {
+                closeTrade(dbTrade.id, closeResult.avgPrice || 0, pos.qty,
+                  pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, closeFee, "ai_close");
+              }
+            } else {
+              closeTrade(dbTrade.id, closeResult.avgPrice || 0, pos.qty,
+                pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, closeFee, "ai_close");
+            }
+          }
+        } catch (e: any) {
+          logger.error(`AI平仓失败 ${aiPos.symbol}: ${e.message}`);
+        }
       }
     }
 
@@ -517,29 +596,36 @@ async function aiDecisionCycle() {
         }
         if (existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "已有持仓" }); logger.info(`已有 ${trade.symbol} 持仓，跳过`); continue; }
         if (existingSymbols.size >= CONFIG.maxPositions) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
-        // 止损冷却检查：该币种刚被止损，暂停指定分钟数
-        if (stopCooldown.has(trade.symbol) && Date.now() - (stopCooldown.get(trade.symbol)||0) < STOP_COOLDOWN_MINUTES * 60000) {
-          const mins = Math.ceil((STOP_COOLDOWN_MINUTES * 60000 - (Date.now() - (stopCooldown.get(trade.symbol)||0))) / 60000);
+        // 止损冷却检查：递增惩罚
+        const dynMin = getDynamicCooldown(trade.symbol);
+        const dynMs = dynMin * 60000;
+        if (stopCooldown.has(trade.symbol) && Date.now() - (stopCooldown.get(trade.symbol)||0) < dynMs) {
+          const mins = Math.ceil((dynMs - (Date.now() - (stopCooldown.get(trade.symbol)||0))) / 60000);
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `止损冷却${mins}分钟` });
-          logger.info(`⏸️ ${trade.symbol} 止损冷却中，${mins}分钟后恢复`);
+          logger.info(`⏸️ ${trade.symbol} 止损冷却中，${mins}分钟/${dynMin}总 (连续${consecutiveStopCount.get(trade.symbol) || 1}次)`);
           execLog.push(`cooldown:${trade.symbol}`);
           continue;
         }
 
-        // AI 评分过滤：0-40跳过，40-70半仓，70+全仓
+        // AI 评分过滤：0-30跳过，30-70半仓，70+全仓
+        // 策略评分 |score|≥8 时绕过AI评分过滤（强信号直接执行）
         const aiScore = aiResult?.signals.get(trade.symbol)?.score ?? 70;
-        if (aiScore < 40) {
+        const bypassAi = Math.abs(trade.score || 0) >= 8;
+        if (!bypassAi && aiScore < 30) {
           const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "评分不足";
-          const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<40，跳过 (${aiRsn})`;
+          const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<30，跳过 (${aiRsn})`;
           tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI评分${aiScore}: ${aiRsn}` });
           logger.info(msg);
           execLog.push(msg);
           continue;
         }
-        if (aiScore < 70) {
+        if (!bypassAi && aiScore < 70) {
           // 半仓：仓位砍半
           trade.amountPercent = Math.round(trade.amountPercent / 2);
           logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位减半至${trade.amountPercent}%`);
+        }
+        if (bypassAi) {
+          logger.info(`   ${trade.symbol} 策略评分|${trade.score}|≥8，绕过AI评分过滤`);
         }
 
 
@@ -605,20 +691,41 @@ async function aiDecisionCycle() {
       }
     }
 
-    // 6. AI 交易复盘（每 72 周期≈6 小时一次）
-    if (aiCycleNumber % 72 === 0 && aiCycleNumber > 0) {
-      const allTrades = getTradesHistory(7) as any[];
-      const tradeSummary = buildTradeSummary(allTrades);
-      const symbolStats = buildSymbolStats(allTrades);
-      const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:5-10% 跟踪:1.5%/0.6%`;
-      const review = await aiTradeReview(tradeSummary, symbolStats, configStr);
-      if (review) {
-        logger.info(`📊 AI 交易复盘:\n${review}`);
-        (report as any).aiReviewSummary = review;
-      }
-    }
+    // 6. AI 交易复盘（每 36 周期≈3 小时一次，独立定时器，不阻塞决策循环）
+    scheduleReview(aiCycleNumber);
   } catch (e: any) {
     logger.error(`AI 决策异常: ${e.message}`);
+  }
+}
+
+/** 独立复盘定时器：每 6 周期≈30分钟触发一次，不阻塞决策主流程 */
+let lastReviewCycle = 0;
+async function scheduleReview(currentCycle: number) {
+  if (currentCycle % 6 !== 0 || currentCycle === lastReviewCycle) return;
+  try {
+    const allTrades = getTradesHistory(7) as any[];
+    const tradeSummary = buildTradeSummary(allTrades);
+    const symbolStats = buildSymbolStats(allTrades);
+    const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:4-8% 跟踪:0.8%/0.4%→2%/0.3%`;
+    const review = await aiTradeReview(tradeSummary, symbolStats, configStr);
+    if (review) {
+      logger.info(`📊 AI 交易复盘(周期#${currentCycle}):\n${review}`);
+      // 持久化到 DB
+      const wins = allTrades.filter((t: any) => t.status === 'closed' && (t.pnl || 0) > 0).length;
+      const closed = allTrades.filter((t: any) => t.status === 'closed').length;
+      insertAiReview({
+        time: new Date().toISOString(),
+        cycle_number: currentCycle,
+        summary: review.length > 200 ? review.slice(0, 200) + '...' : review,
+        total_trades: allTrades.length,
+        total_pnl: allTrades.reduce((s: number, t: any) => s + (t.pnl || 0), 0),
+        win_rate: closed > 0 ? wins / closed : 0,
+        full_report: review,
+      });
+      lastReviewCycle = currentCycle; // 成功后才标记
+    }
+  } catch (e: any) {
+    logger.warn(`📊 AI 复盘(周期#${currentCycle})失败: ${e.message}，下周期重试`);
   }
 }
 

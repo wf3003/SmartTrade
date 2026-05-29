@@ -84,8 +84,8 @@ export interface StopLossResult {
 
 /**
  * 检查是否触发止损（ATR 动态止损）
- * 止损距离 = 1.2 × ATR% × 杠杆，限制在 5%~10% 之间
- * 低波动币种用 5% 兜底，高波动币种自动放宽
+ * 止损距离 = 1.0 × ATR% × 杠杆，限制在 4%~8% 之间
+ * 低波动币种用 4% 兜底，高波动币种自动放宽
  */
 export function checkStopLoss(
   currentPnlPct: number,
@@ -93,10 +93,10 @@ export function checkStopLoss(
   leverage: number = 5,
   atrPct: number = 0.015
 ): StopLossResult | null {
-  const atrStopPct = Math.round(atrPct * 1.2 * leverage * 100 * 10) / 10;
-  const stopThreshold = Math.max(Math.min(atrStopPct, 10), 5);
+  const atrStopPct = Math.round(atrPct * 1.0 * leverage * 100 * 10) / 10;
+  const stopThreshold = Math.max(Math.min(atrStopPct, 8), 4);
   if (currentPnlPct <= -stopThreshold) {
-    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × 1.2 × ${leverage}x = ${stopThreshold.toFixed(0)}%)` };
+    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × 1.0 × ${leverage}x = ${stopThreshold.toFixed(0)}%)` };
   }
   return null;
 }

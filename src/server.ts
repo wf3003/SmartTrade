@@ -5,7 +5,7 @@ import express from "express";
 import path from "path";
 import { CONFIG } from "./config";
 import { logger } from "./logger";
-import { db, getTradesToday, getDecisionsToday, getDecisionsHistory, getTradesHistory, getTradeStats, syncExchangeOrders, getExchangeOrders } from "./db";
+import { db, getTradesToday, getDecisionsToday, getDecisionsHistory, getTradesHistory, getTradeStats, syncExchangeOrders, getExchangeOrders, getRecentAiReviews } from "./db";
 import { exchangeManager } from "./exchanges";
 import { latestReport, cachedPositions, cachedAccount } from "./state";
 
@@ -84,11 +84,12 @@ export async function startServer(host?: string, port?: number) {
           defaultLeverage: CONFIG.defaultLeverage,
           maxPositions: CONFIG.maxPositions,
           model: CONFIG.ai.model,
-          trailStopRange: "1.5%/0.6%→3%/0.5%",
+          trailStopRange: "0.8%/0.4%→2%/0.3%",
           stopLossUsdt: CONFIG.accountStopLossUsdt,
           takeProfitUsdt: CONFIG.accountTakeProfitUsdt,
           initialBalance: CONFIG.initialBalance,
         },
+        reviews: getRecentAiReviews(10),
       });
     } catch (e: any) {
       res.json({ ok: false, error: e.message });

@@ -86,6 +86,19 @@ try { db.exec("ALTER TABLE trades ADD COLUMN peak_pnl_pct REAL DEFAULT 0"); } ca
 try { db.exec("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_qty REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_pnl REAL DEFAULT 0"); } catch {}
+// AI 交易复盘记录
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ai_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    time TEXT NOT NULL,
+    cycle_number INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    total_trades INTEGER DEFAULT 0,
+    total_pnl REAL DEFAULT 0,
+    win_rate REAL DEFAULT 0,
+    full_report TEXT
+  );
+`);
 logger.info("数据库已连接: " + dbPath);
 
 // 查询工具函数
@@ -256,4 +269,19 @@ export function getOpenPositionPeakPnlMap(): Map<string, { tradeId: number; peak
 /** 保存峰值 PnL 到数据库（持久化，防止重启丢失） */
 export function updatePeakPnlInDb(id: number, peakPnlPct: number) {
   return db.prepare("UPDATE trades SET peak_pnl_pct = ? WHERE id = ?").run(peakPnlPct, id);
+}
+
+// ========== AI 复盘持久化 ==========
+export function insertAiReview(r: {
+  time: string; cycle_number: number; summary: string;
+  total_trades: number; total_pnl: number; win_rate: number; full_report: string;
+}) {
+  return db.prepare(`
+    INSERT INTO ai_reviews (time, cycle_number, summary, total_trades, total_pnl, win_rate, full_report)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(r.time, r.cycle_number, r.summary || "", r.total_trades, r.total_pnl, r.win_rate, r.full_report || "");
+}
+
+export function getRecentAiReviews(limit: number = 5) {
+  return db.prepare("SELECT * FROM ai_reviews ORDER BY id DESC LIMIT ?").all(limit);
 }
