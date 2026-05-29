@@ -78,7 +78,7 @@ ${signalLines}
       model: CONFIG.ai.model,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.1,
-      max_tokens: 2000,
+      max_tokens: CONFIG.ai.maxTokens,
       response_format: { type: "json_object" },
     });
 

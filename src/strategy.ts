@@ -1,7 +1,7 @@
 import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
 import { calcIndicators, calcMarketQuality } from "./indicators";
-import { setAtrCache, setRsiCache } from "./state";
+import { setAtrCache, setRsiCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor } from "./state";
 import { logger } from "./logger";
 
 type S = "buy" | "sell" | "hold";
@@ -226,8 +226,19 @@ export async function generateStrategyReport(
       else if (mq >= 20) { adjPct = 2; adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 1/4仓
       else { sig = "hold"; sc = 0; re = `低行情质量(mq${mq})，跳过`; }  // 很差 → 跳过
       if (sig !== "hold") {
-        logger.info(`[MQ] ${sym}: mq=${mq} sig=${sig} pct=${adjPct} lev=${adjLeverage}`);
-        nt.push({ action: sig, symbol: sym, leverage: adjLeverage, amountPercent: adjPct, reason: re, confidence: cf, score: sc, stopLossPct: 3, takeProfitPct: 6, regime: rl, marketQuality: mq } as any);
+        // AI 复盘反馈 — 动态调整评分/杠杆/置信度
+        const adjScore = getAdjustedScore(sym, sc, re);
+        const adjLev = getAdjustedLeverage(adjLeverage);
+        const adjCf = getAdjustedConfidenceFloor(cf);
+        if (adjScore === 0) {
+          logger.info(`[ADJ] ${sym} 复盘调整后 score=0，跳过 (原${sc} ${re.slice(0,30)})`);
+          continue;
+        }
+        if (adjScore !== sc || adjLev !== adjLeverage) {
+          logger.info(`[ADJ] ${sym}: score ${sc}→${adjScore} | lev ${adjLeverage}→${adjLev} | cf ${cf}→${adjCf}`);
+        }
+        logger.info(`[MQ] ${sym}: mq=${mq} sig=${sig} pct=${adjPct} lev=${adjLev}`);
+        nt.push({ action: sig, symbol: sym, leverage: adjLev, amountPercent: adjPct, reason: re, confidence: adjCf, score: adjScore, stopLossPct: 3, takeProfitPct: 6, regime: rl, marketQuality: mq } as any);
       }
       if (mq < 20) {
         logger.info(`[MQ] ${sym}: mq=${mq} < 20 信号被行情质量拦截`);
@@ -241,8 +252,20 @@ export async function generateStrategyReport(
     const o = ohlcv.get(pos.symbol); const c = o?.["1h"] ? ca(o["1h"]) : []; const i = calcIndicators(c);
     if (!i) { pc.push({ symbol: pos.symbol, action: "hold", reason: "数据不足", confidence: 0.5 }); continue; }
     let ac: "hold" | "close" = "hold", rr = "";
-    // 出场由监控循环的 ATR 止损 + 跟踪止盈接管，策略不主动平仓
-    rr = "持有中";
+    // 极端行情检测：RSI超卖/超涨 + ATR大幅偏离时主动平仓
+    // 避免像BCH那样RSI=7持续超卖但一直hold
+    const at = i.atr14 / t.price * 100;
+    const maDist = (t.price - i.ema20) / i.ema20 * 100;
+    const atrMult = Math.abs(maDist) / Math.max(at, 0.01);
+    if (pos.side === "short" && i.rsi14 < 30 && maDist < 0 && atrMult >= 2.5) {
+      ac = "close";
+      rr = `超跌反弹风险(偏离${Math.abs(maDist).toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${i.rsi14.toFixed(0)})`;
+    } else if (pos.side === "long" && i.rsi14 > 70 && maDist > 0 && atrMult >= 2.5) {
+      ac = "close";
+      rr = `超涨回调风险(偏离${maDist.toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${i.rsi14.toFixed(0)})`;
+    } else {
+      rr = "持有中";
+    }
     pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
   }
   return { analysis: a, positions: pc, newTrades: nt, summary: `【策略周期】${a.length}币种 ${pc.filter(x=>x.action!=="hold").length}持仓指令 ${nt.length}交易信号` };

@@ -3,6 +3,7 @@
  */
 import OpenAI from "openai";
 import { CONFIG } from "./config";
+import { logger } from "./logger";
 
 // DeepSeek 直连不走代理（代理只给交易所用）
 const _savedHttps = process.env.HTTPS_PROXY;
@@ -41,27 +42,32 @@ ${symbolStats}
   "losers": [{"signal":"信号类型","reason":"为什么亏"}],
   "bySymbol": [{"symbol":"BTC/USDT","analysis":"表现分析"}],
   "suggestions": ["具体优化建议"],
-  "blockSignals": "哪些信号应该禁止？为什么？"
+  "blockSignals": "哪些信号应该禁止？为什么？",
+  "blockSymbols": ["BCH/USDT", "SUI/USDT"]
 }`;
 
   try {
     const resp = await openai.chat.completions.create({
-      model: "deepseek-v4-flash",
+      model: CONFIG.ai.model,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
-      max_tokens: 1000,
+      max_tokens: CONFIG.ai.maxTokens,
       response_format: { type: "json_object" },
     });
 
     const text = resp.choices?.[0]?.message?.content || "{}";
+    if (text === "{}" || text.length < 20) {
+      logger.warn(`[复盘] AI 返回过短: ${text.slice(0, 100)}`);
+      return "";
+    }
     const parsed = JSON.parse(text);
     if (parsed.summary || parsed.winners || parsed.losers || parsed.suggestions) {
       return JSON.stringify(parsed, null, 2);
     }
-    console.log("[ai-review] 有响应但缺字段:", text.slice(0, 200));
+    logger.warn(`[复盘] AI 返回缺关键字段: ${text.slice(0, 200)}`);
     return "";
   } catch (e: any) {
-    console.log("[ai-review] 异常:", e.message?.slice(0, 200));
+    logger.warn(`[复盘] 异常: ${e.message?.slice(0, 200)}`);
     return "";
   }
 }

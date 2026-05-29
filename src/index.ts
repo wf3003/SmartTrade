@@ -12,7 +12,7 @@ import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, setCacheData } from "./state";
+import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, resetDynamicParams } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats } from "./ai-review";
 import { 
@@ -61,6 +61,14 @@ const STARTUP_COOLDOWN_CYCLES = 1;
 const MAX_NEW_PER_CYCLE = 10;
 // 本地已开仓集合（防 exchange.getPositions 延迟导致持仓上限失效）
 const openedThisSession = new Set<string>();
+
+// 全局未捕获异常处理（防止决策超时等导致进程崩溃）
+process.on("unhandledRejection", (reason) => {
+  logger.error(`💥 未捕获的 Promise 异常: ${reason instanceof Error ? reason.message : String(reason)}`);
+});
+process.on("uncaughtException", (err) => {
+  logger.error(`💥 未捕获的异常: ${err.message}`);
+});
 
 async function main() {
   logger.info("=".repeat(50));
@@ -198,7 +206,7 @@ async function monitorPositions() {
       const pricePnl = pnlPct / trailLev;          // 当前实际价格涨跌%
       const peakPrice = peakPnl / trailLev;         // 历史最高价格涨跌%
       if (peakPrice >= 0.8 && pos.qty > 0) {
-        const trailDist = peakPrice >= 2.0 ? 0.3 : 0.4;
+        const trailDist = peakPrice >= 3.0 ? 0.8 : 1.0;
         const floor = peakPrice - trailDist;
         if (pricePnl <= floor) {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 价格峰值${peakPrice.toFixed(2)}%→${pricePnl.toFixed(2)}% 回撤${(peakPrice-pricePnl).toFixed(2)}%≥${trailDist}% 平仓${pos.qty}张`);
@@ -484,7 +492,8 @@ async function aiDecisionCycle() {
     }
 
     // 5b. AI 主动平仓（智能执行）
-    //   条件：持仓 > 30分钟 + PnL > -5%（防开仓瞬间被AI关，防亏损过大的让止损处理）
+    //   条件：持仓 > 30分钟（防开仓瞬间被AI关）；AI建议平仓不需要检查PnL
+    //   AI认为该平仓时（如RSI超卖趋势衰竭），即使亏损也应执行
     if (aiResult?.positions) {
       for (const aiPos of aiResult.positions) {
         if (aiPos.action === "hold") continue;
@@ -494,9 +503,9 @@ async function aiDecisionCycle() {
           ? (Date.now() - (newPositionTime.get(pos.symbol) || 0)) / 60000
           : 999;
         const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === pos.symbol);
-        // 保护条件：持仓 < 30分钟 或 亏损超过 -5% → 只预警不平仓
-        if (posAge < 30 || (pos.unrealizedPnlPct || 0) < -5) {
-          logger.warn(`🤖 AI 预警: ${aiPos.symbol} → ${aiPos.action} ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${aiPos.reason} (${posAge<30?'太新':'亏损过大'}，仅提示)`);
+        // 保护条件：仅持仓 < 30分钟时只预警不平仓（防开仓瞬间被AI关）
+        if (posAge < 30) {
+          logger.warn(`🤖 AI 预警: ${aiPos.symbol} → ${aiPos.action} ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${aiPos.reason} (太新，仅提示)`);
           continue;
         }
         // 执行平仓
@@ -613,25 +622,30 @@ async function aiDecisionCycle() {
           continue;
         }
 
-        // AI 评分过滤：0-30跳过，30-70半仓，70+全仓
-        // 策略评分 |score|≥9 时绕过AI评分过滤（强信号直接执行）
+        // AI 评分过滤：0-20跳过，20-40四分之一仓，40-70半仓，70+全仓
+        // 策略评分 |score|≥12 时降低AI评分门槛（强趋势信号放宽过滤）
+        // 但即使绕过也要求 aiScore ≥ 20，AI完全不认同的信号不开
         const aiScore = aiResult?.signals.get(trade.symbol)?.score ?? 70;
-        const bypassAi = Math.abs(trade.score || 0) >= 9;
-        if (!bypassAi && aiScore < 30) {
+        const bypassAi = Math.abs(trade.score || 0) >= 12;
+        if (aiScore < 20) {
           const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "评分不足";
-          const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<30，跳过 (${aiRsn})`;
+          const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<20，跳过 (${aiRsn})`;
           tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI评分${aiScore}: ${aiRsn}` });
           logger.info(msg);
           execLog.push(msg);
           continue;
         }
-        if (!bypassAi && aiScore < 70) {
-          // 半仓：仓位砍半
+        if (!bypassAi && aiScore < 40) {
+          // 四分之一仓
+          trade.amountPercent = Math.round(trade.amountPercent / 4);
+          logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位降至1/4=${trade.amountPercent}%`);
+        } else if (!bypassAi && aiScore < 70) {
+          // 半仓
           trade.amountPercent = Math.round(trade.amountPercent / 2);
           logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位减半至${trade.amountPercent}%`);
         }
         if (bypassAi) {
-          logger.info(`   ${trade.symbol} 策略评分|${trade.score}|≥9，绕过AI评分过滤`);
+          logger.info(`   ${trade.symbol} 策略评分|${trade.score}|≥12，绕过AI评分过滤 (AI评分${aiScore})`);
         }
 
         // 行情质量：规则 mq + AI marketQuality 取平均
@@ -734,6 +748,24 @@ async function scheduleReview(currentCycle: number) {
     const review = await aiTradeReview(tradeSummary, symbolStats, configStr);
     if (review && review.length > 10) {
       logger.info(`📊 AI 交易复盘(周期#${currentCycle}):\n${review}`);
+      // 解析复盘结果，将 AI 建议回馈到策略引擎参数
+      // 复盘建议是定性分析 → 翻译为量化参数调整
+      try {
+        const parsed = JSON.parse(review);
+        // 1. 逐币种表现 → 调整评分乘数（连败币种降权）
+        if (Array.isArray(parsed.bySymbol)) {
+          applySymbolAnalysis(parsed.bySymbol);
+        }
+        // 2. 信号类型 → 增加分数惩罚（追空/追涨扣分）
+        if (parsed.blockSignals && typeof parsed.blockSignals === "string") {
+          applyBlockSignals(parsed.blockSignals);
+        }
+        // 3. 全局建议 → 调整杠杆/止损/置信度
+        if (Array.isArray(parsed.suggestions)) {
+          applyReviewSuggestions(parsed.suggestions);
+        }
+        logger.info(`📊 复盘反馈已应用完成`);
+      } catch {}
       // 持久化到 DB
       const wins = allTrades.filter((t: any) => t.status === 'closed' && (t.pnl || 0) > 0).length;
       const closed = allTrades.filter((t: any) => t.status === 'closed').length;

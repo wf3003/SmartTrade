@@ -42,7 +42,7 @@ export const CONFIG = {
     baseURL: envStr("AI_BASE_URL", "https://api.deepseek.com/v1"),
     model: envStr("AI_MODEL", "deepseek-v4-flash"),
     temperature: envNum("AI_TEMPERATURE", 0.3),
-    maxTokens: envNum("AI_MAX_TOKENS", 3000),
+    maxTokens: envNum("AI_MAX_TOKENS", 8192),
   },
 
   // 交易
