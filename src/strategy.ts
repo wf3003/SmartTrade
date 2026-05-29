@@ -179,6 +179,11 @@ export async function generateStrategyReport(
       ? "纯震荡不开仓"
       : `${regime}/回踩1h${entryMaName}`;
     a.push({ symbol: sym, regime: rl, score: sc, trend: sig === "buy" ? "bullish" : sig === "sell" ? "bearish" : "neutral", strength: Math.abs(sc) >= 7 ? "strong" : Math.abs(sc) >= 4 ? "moderate" : "weak", keyLevels: kl, summary: re, analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: adxDesc(id.adx) });
+    if (sig === "hold" && re) {
+      logger.info(`[ST] ${sym}: ${regime} | score=${sc} sig=hold | ${re.slice(0, 60)}`);
+    } else if (sig !== "hold") {
+      logger.info(`[ST] ${sym}: ${regime} | score=${sc} sig=${sig} cf=${cf} | ${re.slice(0, 60)}`);
+    }
     if (sig !== "hold") {
       // 按行情类型动态计算杠杆
       let leverageMult = 1.0;
