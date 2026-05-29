@@ -109,9 +109,25 @@ export async function generateStrategyReport(
       const h1Aligned = i1 && (isUp ? i1.ema20 > i1.ema50 : i1.ema20 < i1.ema50);
       if (!h1Aligned && !hasPos) {
         // 多空矛盾：日线多/1h空 或 日线空/1h多
-        // 规则优化：日线 ADX ≥ 60 时禁止逆日线开仓，不做追空
-        if (dailyAdx >= 60) {
-          re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60 禁止逆日线开仓`;
+        // 日线 ADX ≥ 60 置信度高 → 顺日线方向开仓
+        if (dailyAdx >= 60 && isUp) {
+          if (maDist >= -entryBand && maDist <= entryBand * 0.6) {
+            sc = Math.round((8 + Math.round(at * 5)) * 1.0);
+            sig = "buy";
+            re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/顺日线做多/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
+            cf = 0.7;
+          } else {
+            re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等回调`;
+          }
+        } else if (dailyAdx >= 60) {
+          if (maDist >= -entryBand * 0.6 && maDist <= entryBand) {
+            sc = Math.round((-8 - Math.round(at * 5)) * 1.0);
+            sig = "sell";
+            re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/顺日线做空/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
+            cf = 0.7;
+          } else {
+            re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等反弹`;
+          }
         } else if (isUp) {
           // 日线多、1h空 → execute short
           if (maDist >= -entryBand * 0.6 && maDist <= entryBand) {
