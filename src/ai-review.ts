@@ -48,7 +48,10 @@ ${symbolStats}
 
     const text = resp.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(text);
-    return parsed.summary ? JSON.stringify(parsed, null, 2) : "";
+    if (parsed.summary || parsed.winners || parsed.losers || parsed.suggestions) {
+      return JSON.stringify(parsed, null, 2);
+    }
+    return "";
   } catch {
     return "";
   }
