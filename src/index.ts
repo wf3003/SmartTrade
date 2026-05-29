@@ -204,6 +204,12 @@ async function monitorPositions() {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 价格峰值${peakPrice.toFixed(2)}%→${pricePnl.toFixed(2)}% 回撤${(peakPrice-pricePnl).toFixed(2)}%≥${trailDist}% 平仓${pos.qty}张`);
           try {
             const closeResult = await exchangeManager.closePosition(pos.symbol, pos.side, pos.qty);
+            stopCooldown.set(pos.symbol, Date.now());
+            if (pnlPct < 0) {
+              const cnt = (consecutiveStopCount.get(pos.symbol) || 0) + 1;
+              consecutiveStopCount.set(pos.symbol, cnt);
+              logger.warn(`  ⏸️ ${pos.symbol} 追涨后亏损平仓，连续${cnt}次`);
+            }
             peakPnlMap.delete(key);
             partialCloseMap.delete(pos.symbol);
             closedThisCycle.add(pos.symbol);
@@ -608,9 +614,9 @@ async function aiDecisionCycle() {
         }
 
         // AI 评分过滤：0-30跳过，30-70半仓，70+全仓
-        // 策略评分 |score|≥8 时绕过AI评分过滤（强信号直接执行）
+        // 策略评分 |score|≥9 时绕过AI评分过滤（强信号直接执行）
         const aiScore = aiResult?.signals.get(trade.symbol)?.score ?? 70;
-        const bypassAi = Math.abs(trade.score || 0) >= 8;
+        const bypassAi = Math.abs(trade.score || 0) >= 9;
         if (!bypassAi && aiScore < 30) {
           const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "评分不足";
           const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<30，跳过 (${aiRsn})`;
@@ -625,7 +631,7 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位减半至${trade.amountPercent}%`);
         }
         if (bypassAi) {
-          logger.info(`   ${trade.symbol} 策略评分|${trade.score}|≥8，绕过AI评分过滤`);
+          logger.info(`   ${trade.symbol} 策略评分|${trade.score}|≥9，绕过AI评分过滤`);
         }
 
 
