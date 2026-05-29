@@ -74,7 +74,9 @@ ${symbolStats}
 
 export function buildTradeSummary(trades: any[]): string {
   if (!trades || trades.length === 0) return "";
-  return trades.map((t: any) => {
+  // 取最近30笔，防42笔以上交易导致提示词+输出超出token限制
+  const recent = trades.slice(-30);
+  return recent.map((t: any) => {
     const pnl = t.pnl || 0;
     const e = pnl >= 0 ? "✅" : "❌";
     const peak = t.peak_pnl_pct ? `峰值${t.peak_pnl_pct.toFixed(1)}%` : "";
