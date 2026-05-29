@@ -730,8 +730,9 @@ async function scheduleReview(currentCycle: number) {
     const tradeSummary = buildTradeSummary(allTrades);
     const symbolStats = buildSymbolStats(allTrades);
     const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:4-8% 跟踪:0.8%/0.4%→2%/0.3%`;
+    logger.info(`📊 AI 复盘(周期#${currentCycle})开始调用...`);
     const review = await aiTradeReview(tradeSummary, symbolStats, configStr);
-    if (review) {
+    if (review && review.length > 10) {
       logger.info(`📊 AI 交易复盘(周期#${currentCycle}):\n${review}`);
       // 持久化到 DB
       const wins = allTrades.filter((t: any) => t.status === 'closed' && (t.pnl || 0) > 0).length;
@@ -746,6 +747,8 @@ async function scheduleReview(currentCycle: number) {
         full_report: review,
       });
       lastReviewCycle = currentCycle; // 成功后才标记
+    } else {
+      logger.info(`📊 AI 复盘(周期#${currentCycle})返回为空，${tradeSummary ? `${allTrades.length}笔交易` : '无交易数据'}`);
     }
   } catch (e: any) {
     logger.warn(`📊 AI 复盘(周期#${currentCycle})失败: ${e.message}，下周期重试`);
