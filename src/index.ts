@@ -204,8 +204,8 @@ async function monitorPositions() {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 价格峰值${peakPrice.toFixed(2)}%→${pricePnl.toFixed(2)}% 回撤${(peakPrice-pricePnl).toFixed(2)}%≥${trailDist}% 平仓${pos.qty}张`);
           try {
             const closeResult = await exchangeManager.closePosition(pos.symbol, pos.side, pos.qty);
-            stopCooldown.set(pos.symbol, Date.now());
             if (pnlPct < 0) {
+              stopCooldown.set(pos.symbol, Date.now());
               const cnt = (consecutiveStopCount.get(pos.symbol) || 0) + 1;
               consecutiveStopCount.set(pos.symbol, cnt);
               logger.warn(`  ⏸️ ${pos.symbol} 追涨后亏损平仓，连续${cnt}次`);
