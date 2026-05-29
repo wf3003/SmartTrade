@@ -128,26 +128,9 @@ export async function generateStrategyReport(
           } else {
             re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等反弹`;
           }
-        } else if (isUp) {
-          // 日线多、1h空 → execute short
-          if (maDist >= -entryBand * 0.6 && maDist <= entryBand) {
-            sc = -5 - Math.round(at * 3);
-            sig = "sell";
-            re = `${regime}/1h空/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
-            cf = 0.55;
-          } else {
-            re = `${regime}/1h空/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等反弹`;
-          }
         } else {
-          // 日线空、1h多 → execute long
-          if (maDist >= -entryBand && maDist <= entryBand * 0.6) {
-            sc = 5 + Math.round(at * 3);
-            sig = "buy";
-            re = `${regime}/1h多/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
-            cf = 0.55;
-          } else {
-            re = `${regime}/1h多/离${entryMaName}${maDist.toFixed(1)}%等回调`;
-          }
+          // 日线弱趋势(ADX<60) + 方向矛盾 → 不交易，避免强多看跌之类的反直觉信号
+          re = `${regime}/日线ADX${dailyAdx.toFixed(0)}<60/1h方向矛盾，等待信号一致`;
         }
       } else if (isUp && !hasPos) {
         if (maDist >= -entryBand && maDist <= entryBand * 0.6) {
