@@ -17,7 +17,7 @@ export function calcMarketQuality(
   if (candles1h.length < 6) return 50; // 数据不足，给中性分
   let score = 0;
 
-  // 1. ATR 趋势 (30分)：ATR放大=波动释放有方向，ATR收窄=蓄势等突破
+  // 1. ATR 趋势 (30分)：ATR大幅收窄(<0.7×前值) = 趋势走完；稳定或微扩 = 趋势健康
   const atr = (h: number[], l: number[], c: number[], n: number) => {
     let sum = 0;
     for (let i = 1; i <= n; i++)
@@ -27,11 +27,13 @@ export function calcMarketQuality(
     return sum / n;
   };
   const h1 = candles1h.map(x => x[2]), l1 = candles1h.map(x => x[3]), c1 = candles1h.map(x => x[4]);
-  const atrRecent = atr(h1, l1, c1, 5);
-  const atrOld = atr(h1, l1, c1.slice(0, -5), 5);
-  if (atrRecent > atrOld * 1.15) score += 30;
-  else if (atrRecent > atrOld * 1.02) score += 20;
-  else if (atrRecent > atrOld * 0.90) score += 10;
+  if (c1.length < 10) { score += 15; } else {
+    const atrRecent = atr(h1, l1, c1, 5);
+    const atrOld = atr(h1, l1, c1.slice(-11, -5), 5);
+    if (atrRecent >= atrOld * 0.85) score += 30;      // ATR未明显收窄 → 趋势健康
+    else if (atrRecent >= atrOld * 0.65) score += 15;  // 小幅收窄 → 中性
+    // ATR大幅收窄(<0.65×) → +0分，趋势可能要结束
+  }
 
   // 2. K线质量 (25分)：实体占比高=方向明确，影线长=多空争夺
   const bodyRatio = candles1h.slice(-6).map(c => {

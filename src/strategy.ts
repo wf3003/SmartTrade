@@ -2,6 +2,7 @@ import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
 import { calcIndicators, calcMarketQuality } from "./indicators";
 import { setAtrCache, setRsiCache } from "./state";
+import { logger } from "./logger";
 
 type S = "buy" | "sell" | "hold";
 
@@ -204,7 +205,11 @@ export async function generateStrategyReport(
       else if (mq >= 20) { adjPct = 2; adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 1/4仓
       else { sig = "hold"; sc = 0; re = `低行情质量(mq${mq})，跳过`; }  // 很差 → 跳过
       if (sig !== "hold") {
+        logger.info(`[MQ] ${sym}: mq=${mq} sig=${sig} pct=${adjPct} lev=${adjLeverage}`);
         nt.push({ action: sig, symbol: sym, leverage: adjLeverage, amountPercent: adjPct, reason: re, confidence: cf, score: sc, stopLossPct: 3, takeProfitPct: 6, regime: rl, marketQuality: mq } as any);
+      }
+      if (mq < 20) {
+        logger.info(`[MQ] ${sym}: mq=${mq} < 20 信号被行情质量拦截`);
       }
     }
   }
