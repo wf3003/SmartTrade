@@ -76,12 +76,29 @@ export function applyReviewSuggestions(suggestions: string[]): void {
 export function applySymbolAnalysis(bySymbol: {symbol: string; analysis: string}[]): void {
   for (const bs of bySymbol) {
     const sym = bs.symbol;
-    if (bs.analysis.includes("全败") || bs.analysis.includes("应避免") || bs.analysis.includes("停止交易")) {
+    const analysis = bs.analysis || "";
+    let penalty = 0;
+    if (analysis.includes("全败") || analysis.includes("全部止损")) penalty = 0.4;
+    else if (analysis.includes("应避免") || analysis.includes("禁止交易") || analysis.includes("建议禁止")) penalty = 0.4;
+    else if (analysis.includes("停止交易") || analysis.includes("建议暂停")) penalty = 0.3;
+    else if (analysis.includes("净亏损最大") || analysis.includes("完全失效")) penalty = 0.3;
+    if (penalty > 0) {
       const cur = symbolScoreMult.get(sym) ?? 1.0;
-      const nv = Math.max(0.3, cur - 0.3);
+      const nv = Math.max(0.3, cur - penalty);
       symbolScoreMult.set(sym, nv);
-      logger.info(`⚙️ ${sym} 复盘"${bs.analysis.slice(0,24)}" → scoreMult=${nv.toFixed(2)}`);
+      logger.info(`⚙️ ${sym} 复盘"${analysis.slice(0,30)}" → scoreMult=${nv.toFixed(2)}`);
     }
+  }
+}
+
+/** 从复盘 blockSymbols 对指定币种降权 */
+export function applyBlockSymbols(blockSymbols: string[]): void {
+  for (const sym of blockSymbols) {
+    if (typeof sym !== "string") continue;
+    const cur = symbolScoreMult.get(sym) ?? 1.0;
+    const nv = Math.max(0.3, cur - 0.4);
+    symbolScoreMult.set(sym, nv);
+    logger.info(`⚙️ ${sym} 复盘→blockSymbols 降权 scoreMult=${nv.toFixed(2)}`);
   }
 }
 

@@ -12,7 +12,7 @@ import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, resetDynamicParams } from "./state";
+import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats } from "./ai-review";
 import { 
@@ -759,6 +759,10 @@ async function scheduleReview(currentCycle: number) {
         // 2. 信号类型 → 增加分数惩罚（追空/追涨扣分）
         if (parsed.blockSignals && typeof parsed.blockSignals === "string") {
           applyBlockSignals(parsed.blockSignals);
+        }
+        // 2b. 建议屏蔽的币种 → 降权（不复用冷启动的硬屏蔽）
+        if (Array.isArray(parsed.blockSymbols)) {
+          applyBlockSymbols(parsed.blockSymbols);
         }
         // 3. 全局建议 → 调整杠杆/止损/置信度
         if (Array.isArray(parsed.suggestions)) {
