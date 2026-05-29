@@ -109,8 +109,9 @@ export function applyBlockSignals(blockSignals: string): void {
     logger.info(`⚙️ 复盘→追空信号-4分`);
   }
   if (blockSignals.includes("追涨") || blockSignals.includes("追多")) {
+    signalScorePenalty.set("追多", 4);
     signalScorePenalty.set("追涨", 4);
-    logger.info(`⚙️ 复盘→追涨信号-4分`);
+    logger.info(`⚙️ 复盘→追多/追涨信号-4分`);
   }
 }
 
