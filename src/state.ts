@@ -121,7 +121,10 @@ export function getAdjustedScore(symbol: string, baseScore: number, reason: stri
   const sm = symbolScoreMult.get(symbol);
   if (sm !== undefined) score = Math.round(score * sm);
   for (const [pattern, penalty] of signalScorePenalty) {
-    if (reason.includes(pattern)) score -= penalty;
+    if (reason.includes(pattern)) {
+      // 惩罚分始终朝0方向推：正分减、负分加
+      score -= Math.sign(score) * penalty;
+    }
   }
   return score;
 }
