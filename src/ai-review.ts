@@ -39,10 +39,10 @@ ${symbolStats}
 
   try {
     const resp = await openai.chat.completions.create({
-      model: CONFIG.ai.model,
+      model: "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
-      max_tokens: 2000,
+      max_tokens: 1000,
       response_format: { type: "json_object" },
     });
 
