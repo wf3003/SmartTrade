@@ -231,14 +231,17 @@ async function refresh(){
             html+=`<div style="font-size:16px;margin-left:8px;color:${res.side==="long"?"#3fb950":"#f85149"}">${res.symbol}: ${dirLabel} ${res.leverage}x ✅ 已开仓 ${res.qty}张 @$${typeof res.price==="number"?res.price.toFixed(res.price>100?0:4):res.price}</div>`;
             if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ✅ 评分${score} ${ai.reason||""}</div>`;
           } else if(res && res.status === "ai_rejected"){
-            html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}</div>`;
+            const actLabel = lb[t.action] || t.action;
+            html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: ${actLabel} ${t.leverage}x — ${t.reason||""}</div>`;
             html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ❌ ${res.reason||ai?.reason||""}</div>`;
           } else {
             // 其他——显示 AI 评分
+            const actLabel = lb[t.action] || t.action;
+            const dirColor = t.action === "buy" ? "#3fb950" : "#f85149";
             const score = ai ? ai.score : 0;
             const emoji = score >= 70 ? "✅" : score >= 40 ? "⚠️" : "❌";
             const pctText = res && res.status === "opened" ? "" : (score < 40 ? " ❌ 评分不足" : score < 70 ? " ⚠️ 半仓" : "");
-            html+=`<div style="font-size:16px;margin-left:8px;color:#f85149">${t.symbol}: 做空 ${t.leverage}x — ${t.reason||""}${pctText}</div>`;
+            html+=`<div style="font-size:16px;margin-left:8px;color:${dirColor}">${t.symbol}: ${actLabel} ${t.leverage}x — ${t.reason||""}${pctText}</div>`;
             if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${emoji} 评分${score} ${ai.reason||""}</div>`;
           }
         }
