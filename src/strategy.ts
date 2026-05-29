@@ -1,6 +1,6 @@
 import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
-import { calcIndicators } from "./indicators";
+import { calcIndicators, calcMarketQuality } from "./indicators";
 import { setAtrCache, setRsiCache } from "./state";
 
 type S = "buy" | "sell" | "hold";
@@ -192,7 +192,20 @@ export async function generateStrategyReport(
       const dynLeverage = Math.min(CONFIG.maxLeverage,
         Math.round(CONFIG.defaultLeverage * leverageMult)
       );
-      nt.push({ action: sig, symbol: sym, leverage: dynLeverage, amountPercent: 5, reason: re, confidence: cf, score: sc, stopLossPct: 3, takeProfitPct: 6, regime: rl });
+      // 行情质量评分 → 动态调整仓位/杠杆/信心
+      const raw1h = o?.["1h"] || [], raw15m = o?.["15m"] || [], raw5m = o?.["5m"] || [];
+      const cvt = (d: {open:number;high:number;low:number;close:number}[]) =>
+        d.map(x => [0, x.open, x.high, x.low, x.close, 0] as number[]);
+      const fr = t.fundingRate !== undefined ? Math.abs(Number(t.fundingRate)) : 0;
+      const mq = calcMarketQuality(cvt(raw1h), cvt(raw15m), cvt(raw5m), fr);
+      let adjPct = 5, adjLeverage = dynLeverage;
+      if (mq >= 70) { adjPct = 5; }                              // 高质量 → 满仓
+      else if (mq >= 40) { adjPct = 3; adjLeverage = dynLeverage > 6 ? dynLeverage - 2 : dynLeverage; }  // 中等 → 半仓
+      else if (mq >= 20) { adjPct = 2; adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 1/4仓
+      else { sig = "hold"; sc = 0; re = `低行情质量(mq${mq})，跳过`; }  // 很差 → 跳过
+      if (sig !== "hold") {
+        nt.push({ action: sig, symbol: sym, leverage: adjLeverage, amountPercent: adjPct, reason: re, confidence: cf, score: sc, stopLossPct: 3, takeProfitPct: 6, regime: rl });
+      }
     }
   }
 

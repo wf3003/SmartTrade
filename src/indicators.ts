@@ -3,6 +3,74 @@ export interface Indicators {
   adx: number; bbUpper: number; bbMiddle: number; bbLower: number;
   volumeAvg: number;
 }
+/**
+ * 行情质量评分 (0-100)
+ *   ATR趋势(30分) + K线质量(25分) + 多周期一致性(30分) + 资金费率(15分)
+ *   高质量 = 趋势清晰适合交易，低质量 = 震荡/纠结/假信号
+ */
+export function calcMarketQuality(
+  candles1h: number[][],
+  candles15m: number[][],
+  candles5m: number[][],
+  fundingRate: number = 0,
+): number {
+  if (candles1h.length < 6) return 50; // 数据不足，给中性分
+  let score = 0;
+
+  // 1. ATR 趋势 (30分)：ATR放大=波动释放有方向，ATR收窄=蓄势等突破
+  const atr = (h: number[], l: number[], c: number[], n: number) => {
+    let sum = 0;
+    for (let i = 1; i <= n; i++)
+      sum += Math.max(h[h.length-i] - l[l.length-i],
+        Math.abs(h[h.length-i] - c[c.length-i-1]),
+        Math.abs(l[l.length-i] - c[c.length-i-1]));
+    return sum / n;
+  };
+  const h1 = candles1h.map(x => x[2]), l1 = candles1h.map(x => x[3]), c1 = candles1h.map(x => x[4]);
+  const atrRecent = atr(h1, l1, c1, 5);
+  const atrOld = atr(h1, l1, c1.slice(0, -5), 5);
+  if (atrRecent > atrOld * 1.15) score += 30;
+  else if (atrRecent > atrOld * 1.02) score += 20;
+  else if (atrRecent > atrOld * 0.90) score += 10;
+
+  // 2. K线质量 (25分)：实体占比高=方向明确，影线长=多空争夺
+  const bodyRatio = candles1h.slice(-6).map(c => {
+    const body = Math.abs(c[4] - c[1]);
+    const range = c[2] - c[3];
+    return range > 0 ? body / range : 0;
+  });
+  const avgBody = bodyRatio.reduce((a,b) => a+b, 0) / bodyRatio.length;
+  if (avgBody > 0.6) score += 25;
+  else if (avgBody > 0.45) score += 18;
+  else if (avgBody > 0.30) score += 10;
+
+  // 3. 多周期一致性 (30分)：1h/15m/5m 方向是否一致
+  const trendDir = (cs: number[][]): number => {
+    if (cs.length < 5) return 0;
+    const ema5 = cs.slice(-5).reduce((s,x) => s+x[4], 0) / 5;
+    const ema20 = cs.slice(-Math.min(20, cs.length)).reduce((s,x) => s+x[4], 0) / Math.min(20, cs.length);
+    const last = cs[cs.length-1][4];
+    if (last > ema5 && ema5 > ema20) return 1;
+    if (last < ema5 && ema5 < ema20) return -1;
+    return 0;
+  };
+  const dirs = [
+    trendDir(candles1h),
+    trendDir(candles15m.length >= 8 ? candles15m : candles1h),
+    trendDir(candles5m.length >= 12 ? candles5m : (candles15m.length >= 8 ? candles15m : candles1h)),
+  ].filter(d => d !== 0);
+  if (dirs.length >= 3 && new Set(dirs).size === 1) score += 30;
+  else if (dirs.length >= 2 && new Set(dirs).size === 1) score += 20;
+  else if (dirs.length >= 2) score += 5;
+
+  // 4. 资金费率信号 (15分)
+  const fr = Math.abs(fundingRate || 0);
+  if (fr < 0.005) score += 15;
+  else if (fr < 0.015) score += 8;
+
+  return Math.min(score, 100);
+}
+
 export function calcIndicators(candles: number[][]): Indicators | null {
   const c = candles;
   if (!c || c.length < 8) return null; // 最少 8 根K线
