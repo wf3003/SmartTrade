@@ -25,6 +25,7 @@ export interface AiPositionSuggestion {
 export interface AiCheckResult {
   signals: Map<string, AiOpinion>;
   positions: AiPositionSuggestion[];
+  marketQuality?: number;  // AI 对整体行情质量的评分 0-100
 }
 
 export async function aiDirectionCheck(
@@ -58,10 +59,14 @@ ${signalLines}
    - 40-70: 认同但谨慎，建议半仓
    - 70-100: 强烈认同，正常开仓
 2. 对每个持仓，评估是否需要主动平仓（趋势反转/不利信号）
+3. 对整个市场行情质量给出 market_quality 0-100：
+   - ATR在放大还是收窄？K线实体大还是小？多周期方向一致还是矛盾？
+   - 高质量=趋势清晰适合交易，低质量=震荡/纠结
 
 格式：
 {"signals":[{"symbol":"BTC/USDT","score":85,"reason":"ADX高位RSI合理"},...],
- "positions":[{"symbol":"ETH/USDT","action":"hold","reason":"趋势完好"},...]}`;
+ "positions":[{"symbol":"ETH/USDT","action":"hold","reason":"趋势完好"},...],
+ "market_quality":65}`;
 
   try {
     const resp = await openai.chat.completions.create({
@@ -86,6 +91,9 @@ ${signalLines}
         closePercent: p.closePercent,
         reason: p.reason || "",
       }));
+    }
+    if (typeof parsed.market_quality === "number") {
+      result.marketQuality = Math.max(0, Math.min(100, parsed.market_quality));
     }
     return result;
   } catch {

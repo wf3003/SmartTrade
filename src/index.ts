@@ -634,7 +634,24 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} 策略评分|${trade.score}|≥9，绕过AI评分过滤`);
         }
 
-
+        // 行情质量：规则 mq + AI marketQuality 取平均
+        const ruleMq = (trade as any).marketQuality ?? 50;
+        const aiMq = aiResult?.marketQuality ?? 50;
+        const finalMq = Math.round((ruleMq + aiMq) / 2);
+        if (finalMq < 20) {
+          const msg = `⏭️ ${trade.symbol} 综合行情质量${finalMq}<20，跳过 (规则${ruleMq} AI${aiMq})`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${finalMq})` });
+          logger.info(msg);
+          execLog.push(msg);
+          continue;
+        } else if (finalMq < 40) {
+          trade.amountPercent = Math.round(trade.amountPercent * 0.5);  // 再减半
+          trade.leverage = Math.max(2, trade.leverage - 2);
+          logger.info(`   ${trade.symbol} 综合行情质量${finalMq}，仓位再减半至${trade.amountPercent}%，杠杆降至${trade.leverage}x`);
+        } else if (finalMq < 70) {
+          trade.amountPercent = Math.round(trade.amountPercent * 0.75); // 减1/4
+          logger.info(`   ${trade.symbol} 综合行情质量${finalMq}，仓位降至${trade.amountPercent}%`);
+        }
 
         logger.warn(`🤖 AI 开仓: ${trade.action} ${trade.symbol} | ${trade.leverage}x | ${trade.amountPercent}%`);
         logger.info(`   理由: ${trade.reason}`);
