@@ -59,7 +59,11 @@ ${signalLines}
    原则：
    - 亏损≠平仓理由（只要趋势完好就应该hold）
    - 盈利收窄（峰值回吐超一半且当前仅微盈）→ close_partial 锁利
-   - 趋势确已转坏（ADX快速回落20+点、MACD背离严重）→ close 止损
+   - 趋势确已转坏才close，需要**两个以上指标同时确认**：
+     · ADX快速回落20+点
+     · MACD背离严重（日线级别顶/底背离）
+     · 成交量持续萎缩 + 价格停滞
+     · RSI单一超买/超卖不是足够的理由
    - 其他情况 → hold
 3. 给出整体市场偏向 market_bias（bullish/bearish/balanced），用于修正逆势信号
 4. 对整个市场行情质量给出 market_quality 0-100：
