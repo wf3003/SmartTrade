@@ -91,6 +91,25 @@ function calcEMA(data: number[], p: number) {
   for (let i = p; i < data.length; i++) ema = data[i] * k + ema * (1 - k);
   return ema;
 }
+
+/** MACD(12,26,9): 返回 DIF、DEA、柱状图方向 */
+export function calcMACD(closes: number[]): { dif: string; dea: string; hist: string; signal: string } {
+  if (closes.length < 35) { return { dif: "数据不足", dea: "", hist: "", signal: "数据不足" }; }
+  const shortEma = calcEMA(closes.slice(-12), 12);
+  const longEma = calcEMA(closes.slice(-26), 26);
+  const dif = shortEma - longEma;
+  const dea = calcEMA(closes.slice(-9).map((_, i, a) => {
+    const seg = a.slice(0, i + 26);
+    return calcEMA(seg.slice(-12), 12) - calcEMA(seg.slice(-26), 26);
+  }), 9);
+  const hist = dif - dea;
+  return {
+    dif: dif.toFixed(2),
+    dea: dea.toFixed(2),
+    hist: hist > 0 ? "多头" : "空头",
+    signal: dif > dea ? (hist > 0 ? "金叉" : "顶背离") : (hist < 0 ? "死叉" : "底背离"),
+  };
+}
 function calcRSI(data: number[], p: number) {
   let g = 0, l = 0;
   for (let i = data.length - p; i < data.length; i++) {

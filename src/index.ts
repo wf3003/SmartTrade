@@ -10,7 +10,7 @@ import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
-import { checkExtremeDeviation } from "./indicators";
+import { checkExtremeDeviation, calcMACD } from "./indicators";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties } from "./state";
@@ -509,7 +509,14 @@ async function aiDecisionCycle() {
         const atr = (atrCache.get(sym) || 0.015) * 100;
         const rsi = rsiCache.get(sym) || 50;
         const analysis = report.analysis?.find((a: any) => a.symbol === sym);
-        return `${sym}:$${t.price} RSI${rsi.toFixed(0)} ATR${atr.toFixed(2)}% ${analysis?.analysis_1d || ""} ${analysis?.summary ? ("| " + analysis.summary) : ""}`;
+        // MACD(日线)
+        const ohlcv = ohlcvData.get(sym);
+        const c1d = ohlcv?.["1d"]?.map(c => c.close) || [];
+        const macd = calcMACD(c1d);
+        const macdStr = macd.signal !== "数据不足" ? `MACD:${macd.signal}(DIF${macd.dif} DEA${macd.dea})` : "";
+        const volStr = t.volume24h ? `量${t.volume24h > 1e6 ? (t.volume24h/1e6).toFixed(1)+"M" : t.volume24h > 1e3 ? (t.volume24h/1e3).toFixed(1)+"K" : t.volume24h.toFixed(0)}` : "";
+        const frStr = t.fundingRate !== undefined ? `费率${(t.fundingRate * 100).toFixed(3)}%` : "";
+        return `${sym}:$${t.price} RSI${rsi.toFixed(0)} ATR${atr.toFixed(2)}% ${volStr} ${frStr} ${macdStr} ${analysis?.analysis_1d || ""} ${analysis?.summary ? ("| " + analysis.summary) : ""}`;
       }).join("\n");
     // 持仓数据：合并交易所持仓 + 策略分析（让AI能基于趋势/RSI/策略判断该不该平仓）
     const posLines = positions.length > 0
