@@ -313,12 +313,16 @@ async function monitorPositions() {
         }
       }
 
-      // 跟踪止盈：价格涨 ≥0.8% 激活（原1.5%），保底0.4%（原0.6%），涨≥2%缩到0.3%（原3%/0.5%）
+      // 跟踪止盈：峰值越高回撤容忍度越大 — 四档阶梯（防峰值15%被1%回撤吞掉）
       const trailLev = Math.max(pos.leverage || 1, 1);
       const pricePnl = pnlPct / trailLev;          // 当前实际价格涨跌%
       const peakPrice = peakPnl / trailLev;         // 历史最高价格涨跌%
       if (peakPrice >= 0.8 && pos.qty > 0) {
-        const trailDist = peakPrice >= 3.0 ? 0.8 : 1.0;
+        let trailDist: number;
+        if (peakPrice >= 12)        trailDist = 3.0;  // 大肉：给3%回撤空间
+        else if (peakPrice >= 6)    trailDist = 2.0;  // 中等：给2%回撤
+        else if (peakPrice >= 3)    trailDist = 1.2;  // 小盈：1.2%回撤
+        else                        trailDist = 0.8;  // 刚激活：紧贴0.8%
         const floor = peakPrice - trailDist;
         if (pricePnl <= floor) {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 价格峰值${peakPrice.toFixed(2)}%→${pricePnl.toFixed(2)}% 回撤${(peakPrice-pricePnl).toFixed(2)}%≥${trailDist}% 平仓${pos.qty}张`);
