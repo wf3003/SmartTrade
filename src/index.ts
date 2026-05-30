@@ -48,7 +48,7 @@ const stopCooldown = new Map<string, number>();
 // 同一币种连续止损计数（递增惩罚）
 const consecutiveStopCount = new Map<string, number>();
 // 止损后暂停该币种交易的最小分钟数
-const STOP_COOLDOWN_MINUTES = 30;
+const STOP_COOLDOWN_MINUTES = 15;
 // 连续止损计数按天衰减：超过24h未新止损则计数减1
 function decayStopCount(symbol: string): void {
   const lastTs = stopCooldown.get(symbol);
@@ -66,9 +66,9 @@ function decayStopCount(symbol: string): void {
 function getDynamicCooldown(symbol: string): number {
   decayStopCount(symbol);
   const cnt = consecutiveStopCount.get(symbol) || 0;
-  if (cnt >= 3) return 8 * 60;   // 8小时
-  if (cnt === 2) return 120;      // 2小时
-  return STOP_COOLDOWN_MINUTES;   // 30分钟
+  if (cnt >= 3) return 4 * 60;   // 4小时
+  if (cnt === 2) return 60;       // 1小时
+  return STOP_COOLDOWN_MINUTES;   // 15分钟
 }
 // 启动后等待 N 个周期再开新仓（让账户数据和 ATR 缓存稳定）
 const STARTUP_COOLDOWN_CYCLES = 1;
@@ -111,8 +111,8 @@ async function executeFullClose(
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
-  // 亏损冷却：只有实际亏损才触发，微利/盈利不惩罚
-  if (actualPnlPct < 0) {
+  // 冷却：平仓盈亏<1%（含亏损和微利）都触发，走统一阶梯15/60/240分钟
+  if (actualPnlPct < 1) {
     const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
     consecutiveStopCount.set(symbol, cnt);
     stopCooldown.set(symbol, Date.now());
