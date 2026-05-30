@@ -192,6 +192,12 @@ process.on("uncaughtException", (err) => {
 });
 
 async function main() {
+  // 打印 git 版本（确认代码已更新）
+  try {
+    const proc = require("child_process");
+    const ver = proc.execSync("git rev-parse --short HEAD 2>/dev/null", { cwd: __dirname }).toString().trim();
+    logger.info(`⚙️ 版本: ${ver}`);
+  } catch {}
   // 重启恢复复盘反馈参数（避免失忆）
   await loadFeedbackFromDb();
   // 强制覆盖硬性惩罚（追空-8分），不受旧持久化数据影响
