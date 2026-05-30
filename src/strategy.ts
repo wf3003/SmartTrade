@@ -63,7 +63,11 @@ export async function generateStrategyReport(
     const entryMa = dailyAdx > 50 ? i1.ema20 : i1.ema50;
     const entryMaName = dailyAdx > 50 ? "EMA20" : "EMA50";
     const maDist = (p - entryMa) / entryMa * 100;
-    const entryBand = Math.max(at * 0.6, 0.5);
+    // 入场带按行情强度分级：强趋势放宽，震荡收紧
+    let entryBand: number;
+    if (dailyAdx >= 40)      entryBand = Math.max(at * 1.2, 0.8);  // 强趋势：价格偏离大时也能入场
+    else if (dailyAdx >= 25) entryBand = Math.max(at * 0.8, 0.6);  // 弱趋势
+    else                     entryBand = Math.max(at * 0.6, 0.5);  // 震荡
     let rl = "", sig: S = "hold", sc = 0, re = "", cf = 0;
 
     if (regime === "纯震荡") {
@@ -140,7 +144,8 @@ export async function generateStrategyReport(
           re = `${regime}/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
           cf = isStrong ? 0.85 : 0.7;
         } else if (maDist > entryBand * 0.6) {
-          sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/追多(${maDist.toFixed(2)}%)`; cf = 0.45;
+          const isStrong = regime.startsWith("强趋势");
+          sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/追多(${maDist.toFixed(2)}%)`; cf = isStrong ? 0.55 : 0.45;
         } else {
           re = `${regime}/跌破${entryMaName}观望`;
         }
@@ -152,7 +157,8 @@ export async function generateStrategyReport(
           re = `${regime}/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
           cf = isStrong ? 0.85 : 0.7;
         } else if (maDist < -entryBand * 0.6) {
-          sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/追空(${maDist.toFixed(2)}%)`; cf = 0.45;
+          const isStrong = regime.startsWith("强趋势");
+          sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/追空(${maDist.toFixed(2)}%)`; cf = isStrong ? 0.55 : 0.45;
         } else {
           re = `${regime}/突破${entryMaName}观望`;
         }

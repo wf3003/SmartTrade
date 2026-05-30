@@ -47,13 +47,13 @@ const stopCooldown = new Map<string, number>();
 // 同一币种连续止损计数（递增惩罚）
 const consecutiveStopCount = new Map<string, number>();
 // 止损后暂停该币种交易的最小分钟数
-const STOP_COOLDOWN_MINUTES = 30;
-// 获取递增冷却时间（分钟）：第1次30分，第2次2h，第3次24h
+const STOP_COOLDOWN_MINUTES = 15;
+// 获取递增冷却时间（分钟）：第1次15分，第2次1h，第3次4h
 function getDynamicCooldown(symbol: string): number {
   const cnt = consecutiveStopCount.get(symbol) || 0;
-  if (cnt >= 3) return 24 * 60;  // 当天不再开
-  if (cnt === 2) return 120;      // 2小时
-  return STOP_COOLDOWN_MINUTES;    // 30分钟
+  if (cnt >= 3) return 4 * 60;   // 4小时
+  if (cnt === 2) return 60;       // 1小时
+  return STOP_COOLDOWN_MINUTES;   // 15分钟
 }
 // 启动后等待 N 个周期再开新仓（让账户数据和 ATR 缓存稳定）
 const STARTUP_COOLDOWN_CYCLES = 1;
@@ -740,7 +740,7 @@ async function aiDecisionCycle() {
       }
     }
 
-    // 6. AI 交易复盘（每 36 周期≈3 小时一次，独立定时器，不阻塞决策循环）
+    // 6. AI 交易复盘（每 6 周期≈30 分钟一次，独立定时器，不阻塞决策循环）
     scheduleReview(aiCycleNumber);
   } catch (e: any) {
     logger.error(`AI 决策异常: ${e.message}`);
@@ -755,7 +755,7 @@ async function scheduleReview(currentCycle: number) {
     const allTrades = getTradesHistory(7) as any[];
     const tradeSummary = buildTradeSummary(allTrades);
     const symbolStats = buildSymbolStats(allTrades);
-    const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:4-8% 跟踪:0.8%/0.4%→2%/0.3%`;
+    const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:5-10% 跟踪:0.8%/0.4%→2%/0.3%`;
     logger.info(`📊 AI 复盘(周期#${currentCycle})开始调用...`);
     const review = await aiTradeReview(tradeSummary, symbolStats, configStr);
     if (review && review.length > 10) {
