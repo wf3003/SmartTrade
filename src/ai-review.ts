@@ -9,12 +9,18 @@ export async function aiTradeReview(
   tradeSummary: string,
   symbolStats: string,
   strategyConfig: string,
+  openPositions: string = "",
 ): Promise<string> {
   if (!tradeSummary) return "";
 
+  const posSection = openPositions ? `【当前持仓实时状态】
+${openPositions}
+
+` : "";
+
   const prompt = `你是一个加密货币交易策略分析师。以下是系统的近期交易记录和策略配置。
 
-【策略配置】
+${posSection}【策略配置】
 ${strategyConfig}
 
 【逐笔交易明细】

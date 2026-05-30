@@ -13,7 +13,7 @@ import { generateStrategyReport } from "./strategy";
 import { checkExtremeDeviation } from "./indicators";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties } from "./state";
+import { setLatestReport, atrCache, rsiCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats } from "./ai-review";
 import { 
@@ -802,9 +802,18 @@ async function scheduleReview(currentCycle: number) {
     const allTrades = getTradesHistory(7) as any[];
     const tradeSummary = buildTradeSummary(allTrades);
     const symbolStats = buildSymbolStats(allTrades);
+    // 当前持仓实时盈亏摘要
+    const posLines = cachedPositions.length > 0
+      ? cachedPositions.map((p: any) => {
+          const peak = peakPnlMap.get(p.symbol) ?? 0;
+          const atr = (atrCache.get(p.symbol) || 0.015) * 100;
+          return `${p.symbol} ${p.side} | PnL:${(p.unrealizedPnlPct||0).toFixed(1)}% 峰值:${peak.toFixed(1)}% 杠杆:${p.leverage}x ATR:${atr.toFixed(1)}%`;
+        }).join("\n")
+      : "无持仓";
+    const openSummary = `当前${cachedPositions.length}个持仓:\n${posLines}`;
     const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:5-10% 跟踪:0.8%/0.4%→2%/0.3%`;
     logger.info(`📊 AI 复盘(周期#${currentCycle})开始调用...`);
-    const review = await aiTradeReview(tradeSummary, symbolStats, configStr);
+    const review = await aiTradeReview(tradeSummary, symbolStats, configStr, openSummary);
     if (review && review.length > 10) {
       logger.info(`📊 AI 交易复盘(周期#${currentCycle}):\n${review}`);
       // 解析复盘结果，将 AI 建议回馈到策略引擎参数
