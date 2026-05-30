@@ -2,18 +2,8 @@
  * AI 方向复核 — 轻量级 DeepSeek 调用
  * 评分 0-100 + 持仓管理建议
  */
-import OpenAI from "openai";
 import { CONFIG } from "./config";
-
-// DeepSeek 直连不走代理（代理只给交易所用）
-const _saved = process.env.HTTPS_PROXY;
-delete process.env.HTTPS_PROXY;
-delete process.env.HTTP_PROXY;
-const openai = new OpenAI({
-  apiKey: CONFIG.ai.apiKey,
-  baseURL: CONFIG.ai.baseURL,
-});
-process.env.HTTPS_PROXY = _saved;
+import { openai } from "./ai-client";
 
 export interface AiOpinion {
   score: number;

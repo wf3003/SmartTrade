@@ -10,6 +10,7 @@ import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
+import { checkExtremeDeviation } from "./indicators";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb } from "./state";
@@ -275,11 +276,9 @@ async function monitorPositions() {
       const extAtr = atrCache.get(pos.symbol) || 0.015;
       const extRsi = rsiCache.get(pos.symbol) || 50;
       const extDelta = pnlPct / Math.max(pos.leverage || 1, 1);
-      const extMult = Math.abs(extDelta) / Math.max(extAtr * 100, 0.01);
-      if (pos.side === "short" && extDelta < 0 && extMult >= 3 && extRsi < 30) {
-        logger.warn(`⚠️ 超跌预警: ${pos.symbol} 偏离${Math.abs(extDelta).toFixed(1)}%×${extMult.toFixed(1)}ATR RSI${extRsi.toFixed(0)}, 谨防反弹`);
-      } else if (pos.side === "long" && extDelta > 0 && extMult >= 3 && extRsi > 70) {
-        logger.warn(`⚠️ 超涨预警: ${pos.symbol} 偏离${extDelta.toFixed(1)}%×${extMult.toFixed(1)}ATR RSI${extRsi.toFixed(0)}, 谨防回调`);
+      const extreme = checkExtremeDeviation(extDelta, extAtr * 100, extRsi, pos.side, 3);
+      if (extreme.hit) {
+        logger.warn(`⚠️ ${extreme.label}预警: ${pos.symbol} ${extreme.detail}, 谨防${extreme.label === "超跌反弹" ? "反弹" : "回调"}`);
       }
 
       // 跟踪止盈：价格涨 ≥0.8% 激活（原1.5%），保底0.4%（原0.6%），涨≥2%缩到0.3%（原3%/0.5%）

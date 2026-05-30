@@ -101,6 +101,10 @@ db.exec(`
 `);
 logger.info("数据库已连接: " + dbPath);
 
+// 日期辅助函数
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const daysAgoStr = (days: number) => new Date(Date.now() - days * 86400000).toISOString();
+
 // 查询工具函数
 export function getOpenPositions() {
   return db.prepare("SELECT * FROM trades WHERE status = 'open' AND (close_type IS NULL OR close_type = '')").all();
@@ -120,27 +124,23 @@ export function getLatestOpenTrades(): Map<string, any> {
 }
 
 export function getTradesToday() {
-  const today = new Date().toISOString().slice(0, 10);
-  return db.prepare("SELECT * FROM trades WHERE entry_time >= ?").all(today);
+  return db.prepare("SELECT * FROM trades WHERE entry_time >= ?").all(todayStr());
 }
 
 export function getDecisionsToday() {
-  const today = new Date().toISOString().slice(0, 10);
-  return db.prepare("SELECT * FROM decisions WHERE time >= ? ORDER BY id DESC LIMIT 50").all(today);
+  return db.prepare("SELECT * FROM decisions WHERE time >= ? ORDER BY id DESC LIMIT 50").all(todayStr());
 }
 
 export function getDecisionsHistory(days: number = 7) {
-  const since = new Date(Date.now() - days * 86400000).toISOString();
-  return db.prepare("SELECT * FROM decisions WHERE time >= ? ORDER BY id DESC").all(since);
+  return db.prepare("SELECT * FROM decisions WHERE time >= ? ORDER BY id DESC").all(daysAgoStr(days));
 }
 
 export function getTradesHistory(days: number = 7) {
-  const since = new Date(Date.now() - days * 86400000).toISOString();
-  return db.prepare("SELECT * FROM trades WHERE entry_time >= ? ORDER BY id DESC").all(since);
+  return db.prepare("SELECT * FROM trades WHERE entry_time >= ? ORDER BY id DESC").all(daysAgoStr(days));
 }
 
 export function getTradeStats(days: number = 7) {
-  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const since = daysAgoStr(days);
   const closed = db.prepare("SELECT * FROM trades WHERE status='closed' AND entry_time >= ?").all(since) as any[];
   const wins = closed.filter(t => (t.pnl || 0) > 0);
   const losses = closed.filter(t => (t.pnl || 0) <= 0);

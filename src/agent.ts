@@ -2,16 +2,11 @@
  * SmartTrade - AI 交易决策引擎
  * 每 5 分钟输出全币种多维度分析 + 持仓管理 + 开仓决策
  */
-import OpenAI from "openai";
 import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { getTradeStats } from "./db";
+import { openai } from "./ai-client";
 import type { MarketData, Position, AccountInfo } from "./exchanges";
-
-const openai = new OpenAI({
-  apiKey: CONFIG.ai.apiKey,
-  baseURL: CONFIG.ai.baseURL,
-});
 
 export interface CoinAnalysis {
   symbol: string;

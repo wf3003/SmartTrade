@@ -1,6 +1,6 @@
 import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
-import { calcIndicators, calcMarketQuality } from "./indicators";
+import { calcIndicators, calcMarketQuality, checkExtremeDeviation } from "./indicators";
 import { setAtrCache, setRsiCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor } from "./state";
 import { logger } from "./logger";
 
@@ -170,14 +170,12 @@ export async function generateStrategyReport(
       re = `已有持仓或等信号`;
     }
     // 超涨/超跌检查（在 a.push 前执行，确保 summary 正确显示）
-    const atrMult = Math.abs(maDist) / Math.max(at, 0.01);
-    const isShort = sig === "sell";
-    if (sig !== "hold" && ((isShort && maDist < 0 && atrMult >= 3 && i1.rsi14 < 30) ||
-        (!isShort && maDist > 0 && atrMult >= 3 && i1.rsi14 > 70))) {
-      sig = "hold";
-      sc = 0;
-      re = `${regime}/${isShort?"超跌反弹":"超涨回调"}风险(偏离${Math.abs(maDist).toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${i1.rsi14.toFixed(0)})`;
-      cf = 0;
+    if (sig !== "hold") {
+      const extreme = checkExtremeDeviation(maDist, at, i1.rsi14, sig === "sell" ? "short" : "long", 3);
+      if (extreme.hit) {
+        sig = "hold"; sc = 0; cf = 0;
+        re = `${regime}/${extreme.label}风险(${extreme.detail})`;
+      }
     }
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
     const td = regime === "纯震荡"
@@ -242,16 +240,12 @@ export async function generateStrategyReport(
     if (!i) { pc.push({ symbol: pos.symbol, action: "hold", reason: "数据不足", confidence: 0.5 }); continue; }
     let ac: "hold" | "close" = "hold", rr = "";
     // 极端行情检测：RSI超卖/超涨 + ATR大幅偏离时主动平仓
-    // 避免像BCH那样RSI=7持续超卖但一直hold
     const at = i.atr14 / t.price * 100;
     const maDist = (t.price - i.ema20) / i.ema20 * 100;
-    const atrMult = Math.abs(maDist) / Math.max(at, 0.01);
-    if (pos.side === "short" && i.rsi14 < 30 && maDist < 0 && atrMult >= 2.5) {
+    const extreme = checkExtremeDeviation(maDist, at, i.rsi14, pos.side, 2.5);
+    if (extreme.hit) {
       ac = "close";
-      rr = `超跌反弹风险(偏离${Math.abs(maDist).toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${i.rsi14.toFixed(0)})`;
-    } else if (pos.side === "long" && i.rsi14 > 70 && maDist > 0 && atrMult >= 2.5) {
-      ac = "close";
-      rr = `超涨回调风险(偏离${maDist.toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${i.rsi14.toFixed(0)})`;
+      rr = `${extreme.label}风险(${extreme.detail})`;
     } else {
       rr = "持有中";
     }

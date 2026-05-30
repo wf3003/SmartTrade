@@ -126,3 +126,44 @@ function calcADX(high: number[], low: number[], close: number[], p: number): num
   if (dxValues.length < p) return 20;
   return dxValues.slice(-p).reduce((a, b) => a + b, 0) / p;
 }
+
+// ========== 超涨 / 超跌检查 ==========
+
+export interface ExtremeDeviation {
+  hit: boolean;
+  label: string;   // "超跌反弹" | "超涨回调"
+  detail: string;  // "偏离X%×YATR RSI-Z" (不含前缀)
+}
+
+/**
+ * 检测价格是否偏离 ATR 多倍 + RSI 极端值
+ * @param priceDelta 价格偏离百分比（如 0.9 = 0.9%，正=超涨，负=超跌）
+ * @param atrPct ATR 百分比（如 0.83 = 0.83%，与 strategy 中 at 变量同单位）
+ * @param rsi RSI 值
+ * @param side 持仓方向
+ * @param atrMultThreshold ATR 倍数阈值，默认 3
+ */
+export function checkExtremeDeviation(
+  priceDelta: number,
+  atrPct: number,
+  rsi: number,
+  side: "long" | "short",
+  atrMultThreshold: number = 3,
+): ExtremeDeviation {
+  const atrMult = Math.abs(priceDelta) / Math.max(atrPct, 0.01);
+  if (side === "short" && priceDelta < 0 && atrMult >= atrMultThreshold && rsi < 30) {
+    return {
+      hit: true,
+      label: "超跌反弹",
+      detail: `偏离${Math.abs(priceDelta).toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${rsi.toFixed(0)}`,
+    };
+  }
+  if (side === "long" && priceDelta > 0 && atrMult >= atrMultThreshold && rsi > 70) {
+    return {
+      hit: true,
+      label: "超涨回调",
+      detail: `偏离${priceDelta.toFixed(1)}%×${atrMult.toFixed(1)}ATR RSI${rsi.toFixed(0)}`,
+    };
+  }
+  return { hit: false, label: "", detail: "" };
+}
