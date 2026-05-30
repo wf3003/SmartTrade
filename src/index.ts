@@ -175,6 +175,8 @@ async function executeFullOpen(
       notional, margin: notional / leverage,
       entry_fee: openResult.fee || 0,
     });
+    // 关掉同币种其他open记录（避免sync_rebuild幽灵记录残留）
+    try { db.prepare("UPDATE trades SET status='replaced' WHERE symbol=? AND status='open' AND id!=(SELECT MAX(id) FROM trades WHERE symbol=? AND status='open')").run(symbol, symbol); } catch {}
     logger.warn(`✅ 开仓: ${symbol} ${side} ${qty}张 @$${fillPrice} ${leverage}x`);
     return { success: true, fillPrice };
   } catch (e: any) {
