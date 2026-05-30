@@ -80,6 +80,7 @@ export async function startServer(host?: string, port?: number) {
         equityHistory,
         config: {
           symbols: CONFIG.symbols,
+          exchanges: CONFIG.exchanges,
           maxLeverage: CONFIG.maxLeverage,
           defaultLeverage: CONFIG.defaultLeverage,
           maxPositions: CONFIG.maxPositions,

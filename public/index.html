@@ -166,8 +166,10 @@ async function refresh(){
       `<div class="stat"><span class="label">已用保证金</span><span class="value">$${sa(a.marginUsed,2)}</span></div>`+
       `<div class="stat"><span class="label">盈亏值</span><span class="value ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}</span></div>`+
       `<div class="stat"><span class="label">盈亏率</span><span class="value ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</span></div>`;
+    const exs = (d.config.exchanges || []).map(function(e){return e.toUpperCase();}).join(" + ");
     $("config-card").innerHTML=
       `<h4>配置</h4>`+
+      `<div class="stat"><span class="label">交易所</span><span class="value">${exs}</span></div>`+
       `<div class="stat"><span class="label">杠杆基数</span><span class="value">${d.config.defaultLeverage}x (可调 ${Math.round(d.config.defaultLeverage*0.4)}x-${d.config.defaultLeverage}x)</span></div>`+
       `<div class="stat"><span class="label">最大持仓数</span><span class="value">${d.config.maxPositions}</span></div>`+
       `<div class="stat"><span class="label">AI 模型</span><span class="value">${d.config.model}</span></div>`+
