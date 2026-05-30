@@ -280,11 +280,12 @@ async function monitorPositions() {
       return;
     }
 
-    // 去重：同一币种只保留一条（OKX 有时逐仓/全仓各返回一条）
-    const seenSymbols = new Set<string>();
+    // 去重：同一交易所+币种只保留一条（OKX 有时逐仓/全仓各返回一条）
+    const seenPairs = new Set<string>();
     const uniquePositions = positions.filter(p => {
-      if (seenSymbols.has(p.symbol)) return false;
-      seenSymbols.add(p.symbol);
+      const key = `${(p as any).exchange || "default"}|${p.symbol}`;
+      if (seenPairs.has(key)) return false;
+      seenPairs.add(key);
       return true;
     });
 
