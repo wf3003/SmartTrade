@@ -163,6 +163,20 @@ process.on("uncaughtException", (err) => {
 async function main() {
   // 重启恢复复盘反馈参数（避免失忆）
   await loadFeedbackFromDb();
+  // 恢复连续止损计数（不复位冷却惩罚）
+  try {
+    const { loadFeedbackState } = await import("./db");
+    const raw = loadFeedbackState();
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data.consecutiveStopCount) {
+        for (const [k, v] of Object.entries(data.consecutiveStopCount)) {
+          consecutiveStopCount.set(k, v as number);
+        }
+        logger.info(`📋 恢复连续止损计数: ${consecutiveStopCount.size}条`);
+      }
+    }
+  } catch {}
   logger.info("=".repeat(50));
   logger.info("   SmartTrade — AI 多交易所合约交易系统");
   logger.info(`   监控: 每 ${MONITOR_INTERVAL / 1000}s | 策略决策: 每 ${DECISION_INTERVAL / 1000}s`);
@@ -778,7 +792,7 @@ async function scheduleReview(currentCycle: number) {
         }
         logger.info(`📊 复盘反馈已应用完成`);
         // 持久化到数据库，防止进程重启丢失
-        saveFeedbackToDb().catch(() => {});
+        saveFeedbackToDb({ consecutiveStopCount: Object.fromEntries(consecutiveStopCount) }).catch(() => {});
       } catch {}
       // 持久化到 DB
       const wins = allTrades.filter((t: any) => t.status === 'closed' && (t.pnl || 0) > 0).length;

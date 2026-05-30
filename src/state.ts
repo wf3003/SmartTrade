@@ -146,9 +146,10 @@ export function getAdjustedConfidenceFloor(base: number): number {
 
 // ===== 持久化：启动恢复 + 复盘后保存 =====
 
-export async function saveFeedbackToDb(): Promise<void> {
+export async function saveFeedbackToDb(extra?: Record<string, any>): Promise<void> {
   const { saveFeedbackState } = await import("./db");
   const payload = JSON.stringify({
+    ...(extra || {}),
     symbolScoreMult: Object.fromEntries(symbolScoreMult),
     signalScorePenalty: Object.fromEntries(signalScorePenalty),
     leverageMult,
