@@ -549,16 +549,17 @@ async function aiDecisionCycle() {
         (report as any).aiPositions = aiResult.positions;
       }
       // AI 市场偏向覆盖硬编码修正
-      if (aiResult.marketBias && aiResult.marketBias !== "balanced") {
-        const biasLabel = aiResult.marketBias === "bullish" ? "多头主导" : "空头主导";
-        logger.info(`🤖 AI 市场偏向: ${biasLabel}，覆盖策略的逆势信号修正`);
-        for (const t of report.newTrades) {
-          if (t.action === "hold") continue;
-          const isReverse = (t.action === "buy" && aiResult.marketBias === "bearish")
-            || (t.action === "sell" && aiResult.marketBias === "bullish");
-          if (isReverse) {
-            t.confidence = Math.max(0.3, (t.confidence || 0) - 0.15);
-            t.score = Math.round((t.score || 0) * 0.7);
+      if (aiResult.marketBias) {
+        logger.info(`🤖 AI market_bias: ${aiResult.marketBias}`);
+        if (aiResult.marketBias !== "balanced") {
+          for (const t of report.newTrades) {
+            if (t.action === "hold") continue;
+            const isReverse = (t.action === "buy" && aiResult.marketBias === "bearish")
+              || (t.action === "sell" && aiResult.marketBias === "bullish");
+            if (isReverse) {
+              t.confidence = Math.max(0.3, (t.confidence || 0) - 0.15);
+              t.score = Math.round((t.score || 0) * 0.7);
+            }
           }
         }
       }
