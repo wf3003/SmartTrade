@@ -111,6 +111,14 @@ async function executeFullClose(
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
+  // 微利/微亏冷却：入场5分钟内平仓且盈亏极小→信号质量差，冷却10分钟防反复开平
+  const posAgeMs = newPositionTime.has(symbol) ? Date.now() - (newPositionTime.get(symbol) || 0) : 99999;
+  if (posAgeMs < 5 * 60_000 && Math.abs(actualPnlPct) < 0.5) {
+    stopCooldown.set(symbol, Date.now());
+    const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
+    consecutiveStopCount.set(symbol, cnt);
+    logger.warn(`  ⏸️ ${symbol} 短时微利开平，冷却10分钟 (连续${cnt}次)`);
+  }
   // 亏损冷却
   if (actualPnlPct < 0) {
     const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
