@@ -21,6 +21,7 @@ export interface AiCheckResult {
   signals: Map<string, AiOpinion>;
   positions: AiPositionSuggestion[];
   marketQuality?: number;  // AI 对整体行情质量的评分 0-100
+  marketBias?: "bullish" | "bearish" | "balanced";  // AI 对市场整体偏向的判断
 }
 
 export async function aiDirectionCheck(
@@ -54,7 +55,8 @@ ${signalLines}
    - 40-70: 认同但谨慎，建议半仓
    - 70-100: 强烈认同，正常开仓
 2. 对每个持仓，评估是否需要主动平仓（趋势反转/不利信号）
-3. 对整个市场行情质量给出 market_quality 0-100：
+3. 给出整体市场偏向 market_bias（bullish/bearish/balanced），用于修正逆势信号
+4. 对整个市场行情质量给出 market_quality 0-100：
    - ATR在放大还是收窄？K线实体大还是小？多周期方向一致还是矛盾？
    - 高质量=趋势清晰适合交易，低质量=震荡/纠结
 
@@ -89,6 +91,9 @@ ${signalLines}
     }
     if (typeof parsed.market_quality === "number") {
       result.marketQuality = Math.max(0, Math.min(100, parsed.market_quality));
+    }
+    if (["bullish", "bearish", "balanced"].includes(parsed.market_bias)) {
+      result.marketBias = parsed.market_bias;
     }
     return result;
   } catch {
