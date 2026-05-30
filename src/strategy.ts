@@ -145,7 +145,9 @@ export async function generateStrategyReport(
           cf = isStrong ? 0.85 : 0.7;
         } else if (maDist > entryBand * 0.6) {
           const isStrong = regime.startsWith("强趋势");
-          sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/追多(${maDist.toFixed(2)}%)`; cf = isStrong ? 0.55 : 0.45;
+          const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
+          sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/追多(${maDist.toFixed(2)}%)`;
+          cf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
         } else {
           re = `${regime}/跌破${entryMaName}观望`;
         }
@@ -158,7 +160,9 @@ export async function generateStrategyReport(
           cf = isStrong ? 0.85 : 0.7;
         } else if (maDist < -entryBand * 0.6) {
           const isStrong = regime.startsWith("强趋势");
-          sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/追空(${maDist.toFixed(2)}%)`; cf = isStrong ? 0.55 : 0.45;
+          const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
+          sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/追空(${maDist.toFixed(2)}%)`;
+          cf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
         } else {
           re = `${regime}/突破${entryMaName}观望`;
         }
