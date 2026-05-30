@@ -274,24 +274,17 @@ async function monitorPositions() {
       }
       const peakPnl = peakPnlMap.get(key)!;
 
-      // 超涨/超跌平仓：偏离 3 ATR + RSI 极端 → 主动平仓（每币种 30s 防重复）
-      if (!_lastExtremeWarnTs) _lastExtremeWarnTs = new Map();
+      // 超涨/超跌预警（仅日志，30s 防刷屏。平仓决策由策略引擎 2.5ATR 阈值执行）
       const extAtr = atrCache.get(pos.symbol) || 0.015;
       const extRsi = rsiCache.get(pos.symbol) || 50;
       const extDelta = pnlPct / Math.max(pos.leverage || 1, 1);
       const extreme = checkExtremeDeviation(extDelta, extAtr * 100, extRsi, pos.side, 3);
       if (extreme.hit) {
+        if (!_lastExtremeWarnTs) _lastExtremeWarnTs = new Map();
         const lastTs = _lastExtremeWarnTs.get(pos.symbol) || 0;
         if (Date.now() - lastTs > 30000) {
           _lastExtremeWarnTs.set(pos.symbol, Date.now());
-          logger.warn(`⚠️ ${extreme.label}: ${pos.symbol} ${extreme.detail}, 主动平仓`);
-          try {
-            await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pnlPct, "extreme_deviation");
-            closedThisCycle.add(pos.symbol);
-          } catch (e: any) {
-            logger.error(`超涨/超跌平仓失败 ${pos.symbol}: ${e.message}`);
-          }
-          continue;
+          logger.warn(`⚠️ ${extreme.label}预警: ${pos.symbol} ${extreme.detail}, 谨防${extreme.label === "超跌反弹" ? "反弹" : "回调"}`);
         }
       }
 
