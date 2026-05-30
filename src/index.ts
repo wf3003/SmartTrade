@@ -443,6 +443,9 @@ async function monitorPositions() {
     for (const t of dbOpen) {
       if (!liveSymbols.has(t.symbol)) {
         closeTrade(t.id, 0, t.entry_qty, 0, 0, 0, "sync_closed");
+        // 同步关闭也设冷却（仓位被外部手段关闭，也该冷却防立刻重开）
+        stopCooldown.set(t.symbol, Date.now());
+        consecutiveStopCount.set(t.symbol, (consecutiveStopCount.get(t.symbol) || 0) + 1);
         logger.warn(`🔧 同步: ${t.symbol} 交易所已无，关闭DB记录`);
       }
     }
