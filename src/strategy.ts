@@ -252,13 +252,15 @@ export async function generateStrategyReport(
     }
     pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
   }
-  // 市场偏向修正：逆势信号降低信心和评分
+  // 市场偏向修正：一方占比≥2/3才算主导，否则均衡不做修正
   const totalBull = a.filter(x => x.trend === "bullish").length;
   const totalBear = a.filter(x => x.trend === "bearish").length;
-  const marketBullish = totalBull > totalBear;
+  const total = Math.max(totalBull + totalBear, 1);
+  const marketBullish = totalBull / total >= 0.66;
+  const marketBearish = totalBear / total >= 0.66;
   for (const t of nt) {
     if (t.action === "hold") continue;
-    const isReverse = (t.action === "buy" && !marketBullish) || (t.action === "sell" && marketBullish);
+    const isReverse = (t.action === "buy" && marketBearish) || (t.action === "sell" && marketBullish);
     if (isReverse) {
       t.confidence = Math.max(0.3, (t.confidence || 0) - 0.15);
       t.score = Math.round((t.score || 0) * 0.7);
