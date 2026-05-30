@@ -136,6 +136,11 @@ export function applyBlockSignals(blockSignals: string): void {
     signalScorePenalty.set("追涨", 4);
     logger.info(`⚙️ 复盘→追多/追涨信号-4分`);
   }
+  if (blockSignals.includes("sync")) {
+    signalScorePenalty.set("sync_rebuild", 4);
+    signalScorePenalty.set("sync_closed", 4);
+    logger.info(`⚙️ 复盘→sync_rebuild/sync_closed信号-4分`);
+  }
 }
 
 /** 启动时强制覆盖硬性惩罚（不受旧持久化数据干扰） */
@@ -144,6 +149,11 @@ export function ensureHardPenalties(): void {
   if (cur < 8) {
     signalScorePenalty.set("追空", 8);
     logger.info(`⚙️ 启动覆盖→追空信号惩罚: ${cur}→8分`);
+  }
+  if (!signalScorePenalty.has("sync_rebuild")) {
+    signalScorePenalty.set("sync_rebuild", 4);
+    signalScorePenalty.set("sync_closed", 4);
+    logger.info(`⚙️ 启动覆盖→sync_rebuild/sync_closed信号-4分`);
   }
 }
 
