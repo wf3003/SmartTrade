@@ -467,8 +467,12 @@ async function aiDecisionCycle() {
             logger.warn(`  ✅ AI 平仓: ${posCmd.symbol}`);
             peakPnlMap.delete(posCmd.symbol);
             openedThisSession.delete(posCmd.symbol);
-            if (posCmd.reason.includes("离场")) {
+            // 亏损平仓触发冷却，防止刚平就立刻重开同一方向
+            if ((pos.unrealizedPnlPct || 0) < 0) {
               stopCooldown.set(posCmd.symbol, Date.now());
+              const cnt = (consecutiveStopCount.get(posCmd.symbol) || 0) + 1;
+              consecutiveStopCount.set(posCmd.symbol, cnt);
+              logger.warn(`  ⏸️ ${posCmd.symbol} 亏损平仓触发冷却，连续${cnt}次`);
             }
             if (dbTrade) closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close");
           } catch (e: any) {
@@ -530,6 +534,13 @@ async function aiDecisionCycle() {
           peakPnlMap.delete(aiPos.symbol);
           partialCloseMap.delete(aiPos.symbol);
           openedThisSession.delete(aiPos.symbol);
+          // 亏损平仓触发冷却
+          if ((pos.unrealizedPnlPct || 0) < 0) {
+            stopCooldown.set(aiPos.symbol, Date.now());
+            const cnt = (consecutiveStopCount.get(aiPos.symbol) || 0) + 1;
+            consecutiveStopCount.set(aiPos.symbol, cnt);
+            logger.warn(`  ⏸️ ${aiPos.symbol} AI亏损平仓触发冷却，连续${cnt}次`);
+          }
           if (dbTrade) {
             const closeFee = closeResult.fee || 0;
             if (aiPos.action === "close_partial") {
