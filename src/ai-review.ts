@@ -75,8 +75,9 @@ export function buildTradeSummary(trades: any[]): string {
 
 export function buildSymbolStats(trades: any[]): string {
   if (!trades) return "";
+  const recent = trades.slice(-30);
   const map: Record<string, {pnl:number; w:number; l:number; ct:string[]}> = {};
-  for (const t of trades) {
+  for (const t of recent) {
     if (t.status !== "closed") continue;
     const s = t.symbol;
     if (!map[s]) map[s] = {pnl:0, w:0, l:0, ct:[]};
