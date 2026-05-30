@@ -62,6 +62,93 @@ const MAX_NEW_PER_CYCLE = 10;
 // 本地已开仓集合（防 exchange.getPositions 延迟导致持仓上限失效）
 const openedThisSession = new Set<string>();
 
+// ========== 统一开仓 / 关仓函数 ==========
+
+/** 统一关仓：交易所平仓 → DB记录 → 状态清理 → 亏损冷却 */
+async function executeFullClose(
+  symbol: string,
+  side: "long" | "short",
+  qty: number,
+  pnl: number,
+  pnlPct: number,
+  closeType: string,
+): Promise<{ closeResult: any }> {
+  const closeResult = await exchangeManager.closePosition(symbol, side, qty);
+  // DB
+  const dbTrade = getLatestOpenTrades().get(symbol);
+  if (dbTrade) {
+    const exitPrice = closeResult.avgPrice || 0;
+    closeTrade(dbTrade.id, exitPrice, qty, pnl, pnlPct, closeResult.fee || 0, closeType);
+  }
+  // 状态清理
+  peakPnlMap.delete(symbol);
+  partialCloseMap.delete(symbol);
+  openedThisSession.delete(symbol);
+  // 亏损冷却
+  if (pnlPct < 0) {
+    const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
+    consecutiveStopCount.set(symbol, cnt);
+    const dynMin = getDynamicCooldown(symbol);
+    stopCooldown.set(symbol, Date.now());
+    logger.warn(`  ⏸️ ${symbol} 亏损平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
+  }
+  return { closeResult };
+}
+
+/** 统一部分平仓：记录分批比例，满100%后完成关闭 */
+async function executePartialClose(
+  symbol: string,
+  side: "long" | "short",
+  qty: number,
+  closePercent: number,
+  dbTrade: any,
+): Promise<{ closeResult: any; newPct: number; partialPnl: number }> {
+  const closeResult = await exchangeManager.closePosition(symbol, side, qty);
+  const newPct = (dbTrade.partial_close_pct || 0) + closePercent;
+  const partialPnl = closeResult.avgPrice > 0
+    ? (side === "long" ? (closeResult.avgPrice - dbTrade.entry_price) : (dbTrade.entry_price - closeResult.avgPrice)) * qty
+    : 0;
+  updatePartialClose(dbTrade.id, newPct, qty, partialPnl);
+  partialCloseMap.delete(symbol);
+  if (newPct >= 100) {
+    openedThisSession.delete(symbol);
+    closeTrade(dbTrade.id, 0, dbTrade.entry_qty, 0, 0, closeResult.fee || 0, "ai_close_partial");
+  }
+  return { closeResult, newPct, partialPnl };
+}
+
+/** 统一开仓：交易所开仓 → DB插入 → 状态跟踪 */
+async function executeFullOpen(
+  symbol: string,
+  side: "long" | "short",
+  qty: number,
+  leverage: number,
+  tickerPrice: number,
+  reason: string,
+  decId: number,
+): Promise<{ success: boolean; fillPrice: number; error?: string }> {
+  try {
+    const openResult = await exchangeManager.openPosition(symbol, side, qty, leverage);
+    updateDecisionStatus(decId, "success");
+    const fillPrice = openResult.avgPrice || tickerPrice;
+    const contractSize = exchangeManager.getContractSize(symbol);
+    const notional = qty * fillPrice * contractSize;
+    insertTrade({
+      exchange: CONFIG.exchanges[0], symbol, side,
+      leverage, entry_price: fillPrice, entry_qty: qty,
+      entry_time: new Date().toISOString(), reason,
+      notional, margin: notional / leverage,
+      entry_fee: openResult.fee || 0,
+    });
+    logger.warn(`✅ 开仓: ${symbol} ${side} ${qty}张 @$${fillPrice} ${leverage}x`);
+    return { success: true, fillPrice };
+  } catch (e: any) {
+    updateDecisionStatus(decId, "failed");
+    logger.error(`开仓失败 ${symbol}: ${e.message}`);
+    return { success: false, fillPrice: 0, error: e.message?.slice(0, 60) };
+  }
+}
+
 // 全局未捕获异常处理（防止决策超时等导致进程崩溃）
 process.on("unhandledRejection", (reason) => {
   logger.error(`💥 未捕获的 Promise 异常: ${reason instanceof Error ? reason.message : String(reason)}`);
@@ -130,17 +217,9 @@ async function monitorPositions() {
     if (account.totalEquity > 0 && account.totalEquity <= MINIMUM_ACCOUNT_STOP_USDT) {
       logger.warn(`⚠️ 账户止损触发: 权益 $${account.totalEquity.toFixed(2)} ≤ $${MINIMUM_ACCOUNT_STOP_USDT}`);
       logger.warn(`   正在平掉所有 ${positions.length} 个持仓...`);
-      const openTrades = getOpenPositions() as any[];
       for (const p of positions) {
         try {
-          await exchangeManager.closePosition(p.symbol, p.side, p.qty);
-          // 同步写 DB
-          const dbTrade = openTrades.find((t: any) => t.symbol === p.symbol);
-          if (dbTrade) {
-            closeTrade(dbTrade.id, 0, p.qty, p.unrealizedPnl || 0, p.unrealizedPnlPct || 0, 0, "account_stop");
-          }
-          peakPnlMap.delete(p.symbol);
-          partialCloseMap.delete(p.symbol);
+          await executeFullClose(p.symbol, p.side, p.qty, p.unrealizedPnl || 0, p.unrealizedPnlPct || 0, "account_stop");
           logger.warn(`  ✅ 已平仓: ${p.symbol}`);
         } catch (e: any) {
           logger.error(`  平仓失败 ${p.symbol}: ${e.message}`);
@@ -213,22 +292,8 @@ async function monitorPositions() {
         if (pricePnl <= floor) {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 价格峰值${peakPrice.toFixed(2)}%→${pricePnl.toFixed(2)}% 回撤${(peakPrice-pricePnl).toFixed(2)}%≥${trailDist}% 平仓${pos.qty}张`);
           try {
-            const closeResult = await exchangeManager.closePosition(pos.symbol, pos.side, pos.qty);
-            if (pnlPct < 0) {
-              stopCooldown.set(pos.symbol, Date.now());
-              const cnt = (consecutiveStopCount.get(pos.symbol) || 0) + 1;
-              consecutiveStopCount.set(pos.symbol, cnt);
-              logger.warn(`  ⏸️ ${pos.symbol} 追涨后亏损平仓，连续${cnt}次`);
-            }
-            peakPnlMap.delete(key);
-            partialCloseMap.delete(pos.symbol);
+            await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pnlPct, "trail_stop");
             closedThisCycle.add(pos.symbol);
-            openedThisSession.delete(pos.symbol);
-            if (dbTrade) {
-              const exitPx = closeResult.avgPrice || currentPrice;
-              const closeFee = closeResult.fee || 0;
-              closeTrade(dbTrade.id, exitPx, pos.qty, pos.unrealizedPnl || 0, pnlPct, closeFee, "trail_stop");
-            }
           } catch (e: any) {
             logger.error(`跟踪止盈失败 ${pos.symbol}: ${e.message}`);
           }
@@ -243,20 +308,9 @@ async function monitorPositions() {
       if (posAgeHours > 4 && pnlPct <= -2 && peakPnl <= 0) {
         logger.warn(`⏰ 时间止损: ${pos.symbol} 持仓${posAgeHours.toFixed(1)}h从未盈利, 亏损${pnlPct.toFixed(1)}%, 平仓释放保证金`);
         try {
-          const closeResult = await exchangeManager.closePosition(pos.symbol, pos.side, pos.qty);
+          await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "time_stop");
           logger.warn(`  ✅ 时间止损平仓成功: ${pos.symbol} ${pos.qty}张`);
-          stopCooldown.set(pos.symbol, Date.now());
-          const cnt = (consecutiveStopCount.get(pos.symbol) || 0) + 1;
-          consecutiveStopCount.set(pos.symbol, cnt);
-          peakPnlMap.delete(key);
-          partialCloseMap.delete(pos.symbol);
           closedThisCycle.add(pos.symbol);
-          openedThisSession.delete(pos.symbol);
-          if (dbTrade) {
-            const closeFee = closeResult.fee || 0;
-            closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
-              pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, closeFee, "time_stop");
-          }
         } catch (e: any) {
           logger.error(`时间止损平仓失败 ${pos.symbol}: ${e.message}`);
         }
@@ -272,24 +326,9 @@ async function monitorPositions() {
       if (stopLossCheck?.shouldClose) {
         logger.warn(`🛑 ${stopLossCheck.description} | ${pos.symbol}`);
         try {
-          const closeResult = await exchangeManager.closePosition(pos.symbol, pos.side, pos.qty);
+          await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, stopLossCheck.level);
           logger.warn(`  ✅ 止损平仓成功: ${pos.symbol} ${pos.qty}张`);
-          // 递增冷却
-          const cnt = (consecutiveStopCount.get(pos.symbol) || 0) + 1;
-          consecutiveStopCount.set(pos.symbol, cnt);
-          const dynMin = getDynamicCooldown(pos.symbol);
-          const dynMs = dynMin * 60000;
-          stopCooldown.set(pos.symbol, Date.now() + (dynMs > 30*60000 ? dynMs - 30*60000 : 0));
-          logger.warn(`  ⏸️ ${pos.symbol} 连续${cnt}次止损，下次冷却${dynMin}分钟`);
-          peakPnlMap.delete(key);
-          partialCloseMap.delete(pos.symbol);
           closedThisCycle.add(pos.symbol);
-          openedThisSession.delete(pos.symbol);
-          if (dbTrade) {
-            const closeFee = closeResult.fee || 0;
-            closeTrade(dbTrade.id, closeResult.avgPrice || currentPrice, pos.qty,
-              pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, closeFee, stopLossCheck.level);
-          }
         } catch (e: any) {
           logger.error(`止损平仓失败 ${pos.symbol}: ${e.message}`);
         }
@@ -462,19 +501,9 @@ async function aiDecisionCycle() {
 
         if (posCmd.action === "close") {
           try {
-            await exchangeManager.closePosition(posCmd.symbol, pos.side, pos.qty);
+            await executeFullClose(posCmd.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
             updateDecisionStatus(decId, "success");
             logger.warn(`  ✅ AI 平仓: ${posCmd.symbol}`);
-            peakPnlMap.delete(posCmd.symbol);
-            openedThisSession.delete(posCmd.symbol);
-            // 亏损平仓触发冷却，防止刚平就立刻重开同一方向
-            if ((pos.unrealizedPnlPct || 0) < 0) {
-              stopCooldown.set(posCmd.symbol, Date.now());
-              const cnt = (consecutiveStopCount.get(posCmd.symbol) || 0) + 1;
-              consecutiveStopCount.set(posCmd.symbol, cnt);
-              logger.warn(`  ⏸️ ${posCmd.symbol} 亏损平仓触发冷却，连续${cnt}次`);
-            }
-            if (dbTrade) closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close");
           } catch (e: any) {
             updateDecisionStatus(decId, "failed");
             logger.error(`  平仓失败: ${e.message}`);
@@ -483,22 +512,9 @@ async function aiDecisionCycle() {
           const clsPct = posCmd.closePercent || 50;
           const qty = Math.ceil(pos.qty * clsPct / 100);
           try {
-            const closeResult = await exchangeManager.closePosition(posCmd.symbol, pos.side, qty);
+            const { newPct, partialPnl } = await executePartialClose(posCmd.symbol, pos.side, qty, clsPct, dbTrade);
             updateDecisionStatus(decId, "success");
-            logger.warn(`  ✅ AI 部分平仓: ${posCmd.symbol} ${qty}张`);
-            if (dbTrade) {
-              const newPct = (dbTrade.partial_close_pct || 0) + clsPct;
-              const partialPnl = closeResult.avgPrice > 0
-                ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * qty
-                : 0;
-              updatePartialClose(dbTrade.id, newPct, qty, partialPnl);
-              logger.info(`💰 AI部分止盈: ${posCmd.symbol} ${qty}张 利润$${partialPnl.toFixed(2)} (累计${newPct}%)`);
-              partialCloseMap.delete(posCmd.symbol);
-              if (newPct >= 100) {
-                openedThisSession.delete(posCmd.symbol);
-                closeTrade(dbTrade.id, 0, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, 0, "ai_close_partial");
-              }
-            }
+            logger.warn(`  ✅ AI 部分平仓: ${posCmd.symbol} ${qty}张 利润$${partialPnl.toFixed(2)} (累计${newPct}%)`);
           } catch (e: any) {
             updateDecisionStatus(decId, "failed");
             logger.error(`  部分平仓失败: ${e.message}`);
@@ -526,37 +542,13 @@ async function aiDecisionCycle() {
         }
         // 执行平仓
         try {
-          const qty = aiPos.action === "close_partial"
-            ? Math.ceil(pos.qty * (aiPos.closePercent || 50) / 100)
-            : pos.qty;
-          const closeResult = await exchangeManager.closePosition(aiPos.symbol, pos.side, qty);
-          logger.warn(`🤖 AI 平仓: ${aiPos.symbol} ${qty}张 — ${aiPos.reason}`);
-          peakPnlMap.delete(aiPos.symbol);
-          partialCloseMap.delete(aiPos.symbol);
-          openedThisSession.delete(aiPos.symbol);
-          // 亏损平仓触发冷却
-          if ((pos.unrealizedPnlPct || 0) < 0) {
-            stopCooldown.set(aiPos.symbol, Date.now());
-            const cnt = (consecutiveStopCount.get(aiPos.symbol) || 0) + 1;
-            consecutiveStopCount.set(aiPos.symbol, cnt);
-            logger.warn(`  ⏸️ ${aiPos.symbol} AI亏损平仓触发冷却，连续${cnt}次`);
-          }
-          if (dbTrade) {
-            const closeFee = closeResult.fee || 0;
-            if (aiPos.action === "close_partial") {
-              const newPct = (dbTrade.partial_close_pct || 0) + (aiPos.closePercent || 50);
-              const partialPnl = closeResult.avgPrice > 0
-                ? (pos.side === "long" ? (closeResult.avgPrice - pos.entryPrice) : (pos.entryPrice - closeResult.avgPrice)) * qty
-                : 0;
-              updatePartialClose(dbTrade.id, newPct, qty, partialPnl);
-              if (newPct >= 100) {
-                closeTrade(dbTrade.id, closeResult.avgPrice || 0, pos.qty,
-                  pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, closeFee, "ai_close");
-              }
-            } else {
-              closeTrade(dbTrade.id, closeResult.avgPrice || 0, pos.qty,
-                pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, closeFee, "ai_close");
-            }
+          if (aiPos.action === "close") {
+            await executeFullClose(aiPos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
+            logger.warn(`🤖 AI 平仓: ${aiPos.symbol} ${pos.qty}张 — ${aiPos.reason}`);
+          } else {
+            const qty = Math.ceil(pos.qty * (aiPos.closePercent || 50) / 100);
+            await executePartialClose(aiPos.symbol, pos.side, qty, aiPos.closePercent || 50, dbTrade);
+            logger.warn(`🤖 AI 平仓: ${aiPos.symbol} ${qty}张 — ${aiPos.reason}`);
           }
         } catch (e: any) {
           logger.error(`AI平仓失败 ${aiPos.symbol}: ${e.message}`);
@@ -702,31 +694,20 @@ async function aiDecisionCycle() {
         });
 
         const side = trade.action === "buy" ? "long" : "short";
-        const margin = account.availableBalance * trade.amountPercent / 100;
+        const margin = Number(account.availableBalance) * trade.amountPercent / 100;
         const ticker = tickers.get(trade.symbol);
-        if (!ticker || ticker.price <= 0) { updateDecisionStatus(decId, "failed"); continue; }
+        if (!ticker || Number(ticker.price) <= 0) { updateDecisionStatus(decId, "failed"); continue; }
 
         const contractSize = exchangeManager.getContractSize(trade.symbol);
-        let qty = Math.max(1, Math.floor(margin * trade.leverage / (ticker.price * contractSize)));
+        let qty = Math.max(1, Math.floor(margin * Number(trade.leverage) / (Number(ticker.price) * Number(contractSize))));
         if (margin <= 0 || qty <= 0) {
-          logger.warn(`⚠️ 保证金不足: 可用$${account.availableBalance.toFixed(2)}`);
+          logger.warn(`⚠️ 保证金不足: 可用$${Number(account.availableBalance).toFixed(2)}`);
           updateDecisionStatus(decId, "failed");
           continue;
         }
 
-        try {
-          const openResult = await exchangeManager.openPosition(trade.symbol, side, qty, trade.leverage);
-          updateDecisionStatus(decId, "success");
-          const fillPrice = openResult.avgPrice || ticker.price;
-          const notional = qty * fillPrice * contractSize;
-          insertTrade({
-            exchange: CONFIG.exchanges[0], symbol: trade.symbol, side,
-            leverage: trade.leverage, entry_price: fillPrice, entry_qty: qty,
-            entry_time: new Date().toISOString(), reason: trade.reason,
-            notional, margin: notional / trade.leverage,
-            entry_fee: openResult.fee || 0,
-          });
-          logger.warn(`✅ 开仓: ${trade.symbol} ${side} ${qty}张 @$${fillPrice} ${trade.leverage}x`);
+        const { success, fillPrice, error } = await executeFullOpen(trade.symbol, side, qty, Number(trade.leverage), Number(ticker.price), trade.reason, Number(decId));
+        if (success) {
           tradeResults.push({ symbol: trade.symbol, status: "opened", side, qty, price: fillPrice, leverage: trade.leverage });
           existingSymbols.add(trade.symbol);
           openedThisSession.add(trade.symbol);
@@ -734,10 +715,8 @@ async function aiDecisionCycle() {
           newPositionTime.set(trade.symbol, Date.now());
           // 逐笔延迟，避免 demo 环境瞬时并发触发限频
           await new Promise(r => setTimeout(r, 1500));
-        } catch (e: any) {
-          updateDecisionStatus(decId, "failed");
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `开仓失败: ${e.message?.slice(0,40)||"未知"}` });
-          logger.error(`开仓失败: ${e.message}`);
+        } else {
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `开仓失败: ${error || "未知"}` });
         }
       }
       }
