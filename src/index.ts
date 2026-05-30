@@ -64,6 +64,8 @@ const MAX_NEW_PER_CYCLE = 10;
 const openedThisSession = new Set<string>();
 // 超涨/超跌日志冷却（防每 2s 重复刷屏）
 let _lastExtremeWarnTs: Map<string, number> | undefined;
+// 监控同步防误重建：记录最近 30s 内被关掉的仓位
+const _recentlyClosed = new Set<string>();
 
 // ========== 统一开仓 / 关仓函数 ==========
 
@@ -101,6 +103,9 @@ async function executeFullClose(
     stopCooldown.set(symbol, Date.now());
     logger.warn(`  ⏸️ ${symbol} 亏损平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
   }
+  // 标记为最近关闭，防止监控同步误重建
+  _recentlyClosed.add(symbol);
+  setTimeout(() => _recentlyClosed.delete(symbol), 30000);
   return { closeResult };
 }
 
@@ -370,6 +375,7 @@ async function monitorPositions() {
     // A. 交易所有但 DB 没有 → 补建记录（清库后恢复）
     for (const pos of uniquePositions) {
       if (closedThisCycle.has(pos.symbol)) continue; // 本轮已止损/止盈平仓，不补建
+      if (_recentlyClosed.has(pos.symbol)) continue; // 最近被AI/策略关掉，等待交易所结算
       if (!dbOpen.find((t: any) => t.symbol === pos.symbol)) {
         const existing = (db.prepare("SELECT id FROM trades WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1").get(pos.symbol) as any);
         if (!existing) {
