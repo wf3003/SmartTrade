@@ -77,18 +77,24 @@ async function executeFullClose(
   closeType: string,
 ): Promise<{ closeResult: any }> {
   const closeResult = await exchangeManager.closePosition(symbol, side, qty);
-  // DB
+  // DB — 用实际成交价重算盈亏，避免传入 pnlPct 为 0/undefined 导致冷却漏掉
   const dbTrade = getLatestOpenTrades().get(symbol);
+  const exitPrice = closeResult.avgPrice || 0;
+  const actualPnl = exitPrice > 0 && dbTrade
+    ? (side === "long" ? (exitPrice - dbTrade.entry_price) : (dbTrade.entry_price - exitPrice)) * qty
+    : pnl;
+  const actualPnlPct = exitPrice > 0 && dbTrade
+    ? (side === "long" ? (exitPrice - dbTrade.entry_price) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1) : (dbTrade.entry_price - exitPrice) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1))
+    : pnlPct;
   if (dbTrade) {
-    const exitPrice = closeResult.avgPrice || 0;
-    closeTrade(dbTrade.id, exitPrice, qty, pnl, pnlPct, closeResult.fee || 0, closeType);
+    closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, closeType);
   }
   // 状态清理
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
   // 亏损冷却
-  if (pnlPct < 0) {
+  if (actualPnlPct < 0) {
     const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
     consecutiveStopCount.set(symbol, cnt);
     const dynMin = getDynamicCooldown(symbol);
