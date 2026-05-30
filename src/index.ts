@@ -111,14 +111,13 @@ async function executeFullClose(
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
-  // 亏损/微利统一冷却：盈亏<0.5%（含亏损和微利）都触发，走统一阶梯15/60/240分钟
-  if (actualPnlPct < 0.5) {
+  // 亏损冷却：只有实际亏损才触发，微利/盈利不惩罚
+  if (actualPnlPct < 0) {
     const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
     consecutiveStopCount.set(symbol, cnt);
     stopCooldown.set(symbol, Date.now());
     const dynMin = getDynamicCooldown(symbol);
-    const tag = actualPnlPct < 0 ? "亏损" : "微利";
-    logger.warn(`  ⏸️ ${symbol} ${tag}平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
+    logger.warn(`  ⏸️ ${symbol} 亏损平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
   }
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
