@@ -252,9 +252,10 @@ export async function generateStrategyReport(
     }
     pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
   }
-  // 市场偏向修正：一方占比≥2/3才算主导，否则均衡不做修正
-  const totalBull = a.filter(x => x.trend === "bullish").length;
-  const totalBear = a.filter(x => x.trend === "bearish").length;
+  // 市场偏向修正（BTC权重翻倍）：一方占比≥2/3才算主导，否则均衡不做修正
+  const weight = (x: any) => x.symbol === "BTC/USDT" ? 2 : 1;
+  const totalBull = a.filter(x => x.trend === "bullish").reduce((s, x) => s + weight(x), 0);
+  const totalBear = a.filter(x => x.trend === "bearish").reduce((s, x) => s + weight(x), 0);
   const total = Math.max(totalBull + totalBear, 1);
   const marketBullish = totalBull / total >= 0.66;
   const marketBearish = totalBear / total >= 0.66;
