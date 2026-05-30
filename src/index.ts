@@ -13,7 +13,7 @@ import { generateStrategyReport } from "./strategy";
 import { checkExtremeDeviation } from "./indicators";
 import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb } from "./state";
+import { setLatestReport, atrCache, rsiCache, setCacheData, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats } from "./ai-review";
 import { 
@@ -192,6 +192,8 @@ process.on("uncaughtException", (err) => {
 async function main() {
   // 重启恢复复盘反馈参数（避免失忆）
   await loadFeedbackFromDb();
+  // 强制覆盖硬性惩罚（追空-8分），不受旧持久化数据影响
+  ensureHardPenalties();
   // 恢复连续止损计数（不复位冷却惩罚）
   try {
     const { loadFeedbackState } = await import("./db");

@@ -128,13 +128,22 @@ export function applyBlockSymbols(blockSymbols: string[]): void {
 /** 从 blockSignals 提取信号类型惩罚 */
 export function applyBlockSignals(blockSignals: string): void {
   if (blockSignals.includes("追空")) {
-    signalScorePenalty.set("追空", 4);
-    logger.info(`⚙️ 复盘→追空信号-4分`);
+    signalScorePenalty.set("追空", 8);
+    logger.info(`⚙️ 复盘→追空信号-8分`);
   }
   if (blockSignals.includes("追涨") || blockSignals.includes("追多")) {
     signalScorePenalty.set("追多", 4);
     signalScorePenalty.set("追涨", 4);
     logger.info(`⚙️ 复盘→追多/追涨信号-4分`);
+  }
+}
+
+/** 启动时强制覆盖硬性惩罚（不受旧持久化数据干扰） */
+export function ensureHardPenalties(): void {
+  const cur = signalScorePenalty.get("追空") ?? 0;
+  if (cur < 8) {
+    signalScorePenalty.set("追空", 8);
+    logger.info(`⚙️ 启动覆盖→追空信号惩罚: ${cur}→8分`);
   }
 }
 
