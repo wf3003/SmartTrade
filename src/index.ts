@@ -192,10 +192,10 @@ process.on("uncaughtException", (err) => {
 });
 
 async function main() {
-  // 打印版本（git commit hash）
+  // 打印版本（从 .version 文件读取）
   try {
-    const { execSync } = await import("child_process");
-    const ver = execSync("git rev-parse --short HEAD", { cwd: __dirname, encoding: "utf8" }).trim();
+    const fs = await import("fs");
+    const ver = fs.readFileSync(".version", "utf8").trim();
     if (ver) logger.info(`⚙️ 版本: ${ver}`);
   } catch {}
   // 重启恢复复盘反馈参数（避免失忆）
