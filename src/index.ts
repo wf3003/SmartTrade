@@ -750,18 +750,18 @@ async function aiDecisionCycle() {
 
         // AI 评分过滤：0-20跳过，20-40四分之一仓，40-70半仓，70+全仓
         // 策略评分 |score|≥12 时降低AI评分门槛（强趋势信号放宽过滤）
-        // 但即使绕过也要求 aiScore ≥ 20，AI完全不认同的信号不开
+        // 但即使绕过也要求 aiScore ≥ 30，AI完全不认同的信号不开
         const aiScore = aiResult?.signals.get(trade.symbol)?.score ?? 70;
         const bypassAi = Math.abs(trade.score || 0) >= 12;
-        if (aiScore < 20) {
+        if (aiScore < 30) {
           const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "评分不足";
-          const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<20，跳过 (${aiRsn})`;
+          const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<30，跳过 (${aiRsn})`;
           tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI评分${aiScore}: ${aiRsn}` });
           logger.info(msg);
           execLog.push(msg);
           continue;
         }
-        if (!bypassAi && aiScore < 40) {
+        if (!bypassAi && aiScore < 50) {
           // 四分之一仓
           trade.amountPercent = Math.round(trade.amountPercent / 4);
           logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位降至1/4=${trade.amountPercent}%`);
