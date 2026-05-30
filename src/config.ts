@@ -54,6 +54,9 @@ export const CONFIG = {
   initialBalance: envNum("INITIAL_BALANCE", 5000),
   symbols: envStr("SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT").split(",").map(s => s.trim()),
 
+  // 仓位：每笔开仓用可用资金的百分比（行情质量好时满仓，差时自动缩到 60%/40%）
+  basePositionPct: envNum("BASE_POSITION_PCT", 5),
+
   // 风控
   accountStopLossUsdt: envNum("ACCOUNT_STOP_LOSS_USDT", 100),
   accountTakeProfitUsdt: envNum("ACCOUNT_TAKE_PROFIT_USDT", 20000),

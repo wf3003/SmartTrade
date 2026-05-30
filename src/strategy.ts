@@ -207,10 +207,11 @@ export async function generateStrategyReport(
         d.map(x => [0, x.open, x.high, x.low, x.close, 0] as number[]);
       const fr = t.fundingRate !== undefined ? Math.abs(Number(t.fundingRate)) : 0;
       const mq = calcMarketQuality(cvt(raw1h), cvt(raw15m), cvt(raw5m), fr);
-      let adjPct = 5, adjLeverage = dynLeverage;
-      if (mq >= 70) { adjPct = 5; }                              // 高质量 → 满仓
-      else if (mq >= 40) { adjPct = 3; adjLeverage = dynLeverage > 6 ? dynLeverage - 2 : dynLeverage; }  // 中等 → 半仓
-      else if (mq >= 20) { adjPct = 2; adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 1/4仓
+      const basePct = CONFIG.basePositionPct;
+      let adjPct = basePct, adjLeverage = dynLeverage;
+      if (mq >= 70) { adjPct = basePct; }                              // 高质量 → 满仓
+      else if (mq >= 40) { adjPct = Math.round(basePct * 0.6); adjLeverage = dynLeverage > 6 ? dynLeverage - 2 : dynLeverage; }  // 中等 → 60%
+      else if (mq >= 20) { adjPct = Math.round(basePct * 0.4); adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 40%
       else { sig = "hold"; sc = 0; re = `低行情质量(mq${mq})，跳过`; }  // 很差 → 跳过
       if (sig !== "hold") {
         // AI 复盘反馈 — 动态调整评分/杠杆/置信度
