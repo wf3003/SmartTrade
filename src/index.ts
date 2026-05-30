@@ -80,6 +80,8 @@ const openedThisSession = new Set<string>();
 let _lastExtremeWarnTs: Map<string, number> | undefined;
 // 监控同步防误重建：记录最近 30s 内被关掉的仓位
 const _recentlyClosed = new Set<string>();
+// 盈利回吐减半：记录最近已减过的币种（防每2s重复减）
+const _halfClosed = new Set<string>();
 
 // ========== 统一开仓 / 关仓函数 ==========
 
@@ -354,6 +356,22 @@ async function monitorPositions() {
             logger.error(`跟踪止盈失败 ${pos.symbol}: ${e.message}`);
           }
           continue;
+        }
+      }
+
+      // 盈利回吐减半仓：曾经到过高位（不含杠杆5%+），回撤到亏损，减半保本
+      // 放在跟踪止盈之后、时间止损之前，不抢全平逻辑的优先级
+      if (peakPrice >= 5 && pnlPct < 0 && pos.qty > 1 && !_halfClosed.has(pos.symbol)) {
+        _halfClosed.add(pos.symbol);
+        setTimeout(() => _halfClosed.delete(pos.symbol), 30000);
+        const half = Math.ceil(pos.qty / 2);
+        logger.warn(`⚠️ 盈利回吐: ${pos.symbol} 峰值${peakPrice.toFixed(1)}%→当前${pnlPct.toFixed(1)}%, 减半${half}张保本`);
+        try {
+          const dbTrade = getLatestOpenTrades().get(pos.symbol);
+          await executePartialClose(pos.symbol, pos.side, half, Math.round(half / pos.qty * 100), dbTrade);
+          logger.info(`  ✅ 减半成功: ${pos.symbol} 剩余${pos.qty - half}张`);
+        } catch (e: any) {
+          logger.error(`盈利回吐减仓失败 ${pos.symbol}: ${e.message}`);
         }
       }
 
