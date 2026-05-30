@@ -192,11 +192,11 @@ process.on("uncaughtException", (err) => {
 });
 
 async function main() {
-  // 打印 git 版本（确认代码已更新）
+  // 打印版本（git commit hash）
   try {
-    const proc = require("child_process");
-    const ver = proc.execSync("git rev-parse --short HEAD 2>/dev/null", { cwd: __dirname }).toString().trim();
-    logger.info(`⚙️ 版本: ${ver}`);
+    const { execSync } = await import("child_process");
+    const ver = execSync("git rev-parse --short HEAD", { cwd: __dirname, encoding: "utf8" }).trim();
+    if (ver) logger.info(`⚙️ 版本: ${ver}`);
   } catch {}
   // 重启恢复复盘反馈参数（避免失忆）
   await loadFeedbackFromDb();
