@@ -49,8 +49,22 @@ const stopCooldown = new Map<string, number>();
 const consecutiveStopCount = new Map<string, number>();
 // 止损后暂停该币种交易的最小分钟数
 const STOP_COOLDOWN_MINUTES = 15;
+// 连续止损计数按天衰减：超过24h未新止损则计数减1
+function decayStopCount(symbol: string): void {
+  const lastTs = stopCooldown.get(symbol);
+  if (!lastTs) return;
+  if (Date.now() - lastTs > 24 * 3600_000) {
+    const cur = consecutiveStopCount.get(symbol) || 0;
+    if (cur > 0) consecutiveStopCount.set(symbol, Math.max(0, cur - 1));
+    if ((consecutiveStopCount.get(symbol) || 0) === 0) {
+      stopCooldown.delete(symbol);
+    }
+  }
+}
+
 // 获取递增冷却时间（分钟）：第1次15分，第2次1h，第3次4h
 function getDynamicCooldown(symbol: string): number {
+  decayStopCount(symbol);
   const cnt = consecutiveStopCount.get(symbol) || 0;
   if (cnt >= 3) return 4 * 60;   // 4小时
   if (cnt === 2) return 60;       // 1小时
