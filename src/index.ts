@@ -132,6 +132,10 @@ async function executePartialClose(
   dbTrade: any,
 ): Promise<{ closeResult: any; newPct: number; partialPnl: number }> {
   const closeResult = await exchangeManager.closePosition(symbol, side, qty);
+  if (!dbTrade) {
+    logger.warn(`  ⚠️ ${symbol} 部分平仓缺少DB记录，无法跟踪分批进度`);
+    return { closeResult, newPct: 0, partialPnl: 0 };
+  }
   const newPct = (dbTrade.partial_close_pct || 0) + closePercent;
   const partialPnl = closeResult.avgPrice > 0
     ? (side === "long" ? (closeResult.avgPrice - dbTrade.entry_price) : (dbTrade.entry_price - closeResult.avgPrice)) * qty

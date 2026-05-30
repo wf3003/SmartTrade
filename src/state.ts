@@ -61,13 +61,25 @@ export function applyReviewSuggestions(suggestions: string[]): void {
       leverageMult = Math.max(0.5, leverageMult - 0.15);
       logger.info(`⚙️ 复盘→降低杠杆: leverageMult=${leverageMult.toFixed(2)}`);
     }
+    if (s.includes("增加杠杆") || s.includes("提高杠杆") || s.includes("杠杆过低")) {
+      leverageMult = Math.min(1.5, leverageMult + 0.15);
+      logger.info(`⚙️ 复盘→提高杠杆: leverageMult=${leverageMult.toFixed(2)}`);
+    }
     if (s.includes("放宽止损")) {
       stopLossMult = Math.min(1.5, stopLossMult + 0.2);
       logger.info(`⚙️ 复盘→放宽止损: stopLossMult=${stopLossMult.toFixed(2)}`);
     }
+    if (s.includes("收紧止损") || s.includes("缩小止损") || s.includes("止损过大")) {
+      stopLossMult = Math.max(0.8, stopLossMult - 0.1);
+      logger.info(`⚙️ 复盘→收紧止损: stopLossMult=${stopLossMult.toFixed(2)}`);
+    }
     if ((s.includes("提高") || s.includes("增加")) && (s.includes("信心") || s.includes("阈值"))) {
       confidenceOffset = Math.min(0.15, confidenceOffset + 0.05);
       logger.info(`⚙️ 复盘→提高信心阈值: confidenceOffset=${confidenceOffset.toFixed(2)}`);
+    }
+    if ((s.includes("降低") || s.includes("减少")) && (s.includes("信心") || s.includes("阈值"))) {
+      confidenceOffset = Math.max(0, confidenceOffset - 0.05);
+      logger.info(`⚙️ 复盘→降低信心阈值: confidenceOffset=${confidenceOffset.toFixed(2)}`);
     }
   }
 }
