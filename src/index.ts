@@ -612,6 +612,11 @@ async function aiDecisionCycle() {
             await executeFullClose(posCmd.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
             updateDecisionStatus(decId, "success");
             logger.warn(`  ✅ AI 平仓: ${posCmd.symbol}`);
+            // 策略指令平仓也强制冷却
+            if (!stopCooldown.has(posCmd.symbol)) {
+              stopCooldown.set(posCmd.symbol, Date.now());
+              consecutiveStopCount.set(posCmd.symbol, (consecutiveStopCount.get(posCmd.symbol) || 0) + 1);
+            }
           } catch (e: any) {
             updateDecisionStatus(decId, "failed");
             logger.error(`  平仓失败: ${e.message}`);
@@ -657,6 +662,12 @@ async function aiDecisionCycle() {
             const qty = Math.ceil(pos.qty * (aiPos.closePercent || 50) / 100);
             await executePartialClose(aiPos.symbol, pos.side, qty, aiPos.closePercent || 50, dbTrade);
             logger.warn(`🤖 AI 平仓: ${aiPos.symbol} ${qty}张 — ${aiPos.reason}`);
+          }
+          // AI平仓后强制短冷却，防策略下一轮又追回
+          if (!stopCooldown.has(aiPos.symbol)) {
+            stopCooldown.set(aiPos.symbol, Date.now());
+            consecutiveStopCount.set(aiPos.symbol, (consecutiveStopCount.get(aiPos.symbol) || 0) + 1);
+            logger.info(`  ⏸️ ${aiPos.symbol} AI平仓强制冷却`);
           }
         } catch (e: any) {
           logger.error(`AI平仓失败 ${aiPos.symbol}: ${e.message}`);
