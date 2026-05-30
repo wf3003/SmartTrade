@@ -72,8 +72,18 @@ export function applyReviewSuggestions(suggestions: string[]): void {
   }
 }
 
-/** 根据逐币种分析调整评分乘数 */
+/** 根据逐币种分析调整评分乘数，未提及币种自动恢复 0.1 */
 export function applySymbolAnalysis(bySymbol: {symbol: string; analysis: string}[]): void {
+  const mentioned = new Set(bySymbol.map(bs => bs.symbol));
+  // 未提及的币种向 1.0 回归（低于 0.5 快恢复 0.2，以上慢恢复 0.1）
+  for (const [sym, cur] of symbolScoreMult) {
+    if (!mentioned.has(sym) && cur < 1.0) {
+      const step = cur < 0.5 ? 0.2 : 0.1;
+      const nv = Math.min(1.0, cur + step);
+      symbolScoreMult.set(sym, nv);
+      logger.info(`⚙️ ${sym} 未在复盘问题列表，scoreMult 回归 ${cur.toFixed(1)}→${nv.toFixed(1)}`);
+    }
+  }
   for (const bs of bySymbol) {
     const sym = bs.symbol;
     const analysis = bs.analysis || "";
@@ -91,11 +101,12 @@ export function applySymbolAnalysis(bySymbol: {symbol: string; analysis: string}
   }
 }
 
-/** 从复盘 blockSymbols 对指定币种降权 */
+/** 从复盘 blockSymbols 对指定币种降权（已因 bySymbol 降权到底的不重复降） */
 export function applyBlockSymbols(blockSymbols: string[]): void {
   for (const sym of blockSymbols) {
     if (typeof sym !== "string") continue;
     const cur = symbolScoreMult.get(sym) ?? 1.0;
+    if (cur <= 0.3) continue; // 已被 applySymbolAnalysis 降到底，不重复
     const nv = Math.max(0.3, cur - 0.4);
     symbolScoreMult.set(sym, nv);
     logger.info(`⚙️ ${sym} 复盘→blockSymbols 降权 scoreMult=${nv.toFixed(2)}`);
