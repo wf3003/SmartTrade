@@ -111,20 +111,14 @@ async function executeFullClose(
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
-  // 微利/微亏冷却：入场30分钟内平仓且盈亏极小→信号质量差，跳涨到第2档60分钟
-  const posAgeMs = newPositionTime.has(symbol) ? Date.now() - (newPositionTime.get(symbol) || 0) : 99999;
-  if (posAgeMs < 30 * 60_000 && Math.abs(actualPnlPct) < 0.5) {
-    consecutiveStopCount.set(symbol, Math.max(2, (consecutiveStopCount.get(symbol) || 0) + 1));
-    stopCooldown.set(symbol, Date.now());
-    logger.warn(`  ⏸️ ${symbol} 短时微利开平，直接冷却60分钟 (连续${consecutiveStopCount.get(symbol)}次)`);
-  }
-  // 亏损冷却
-  if (actualPnlPct < 0) {
+  // 亏损/微利统一冷却：盈亏<0.5%（含亏损和微利）都触发，走统一阶梯15/60/240分钟
+  if (actualPnlPct < 0.5) {
     const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
     consecutiveStopCount.set(symbol, cnt);
-    const dynMin = getDynamicCooldown(symbol);
     stopCooldown.set(symbol, Date.now());
-    logger.warn(`  ⏸️ ${symbol} 亏损平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
+    const dynMin = getDynamicCooldown(symbol);
+    const tag = actualPnlPct < 0 ? "亏损" : "微利";
+    logger.warn(`  ⏸️ ${symbol} ${tag}平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
   }
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
