@@ -42,7 +42,7 @@ ${symbolStats}
   "losers": [{"signal":"信号类型","reason":"为什么亏"}],
   "bySymbol": [{"symbol":"BTC/USDT","analysis":"表现分析"}],
   "suggestions": ["具体优化建议"],
-  "blockSignals": "哪些信号应该禁止？为什么？",
+  "blockSignals": "哪些信号需要降分？为什么？(只降分不禁止)",
   "blockSymbols": ["BCH/USDT", "SUI/USDT"]
 }`;
 
