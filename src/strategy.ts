@@ -76,6 +76,12 @@ export async function generateStrategyReport(
     // ===== 日线方向过滤 + 动态回调入场 =====
     const dailyUp = id.ema20 > id.ema50;
     const dailyAdx = id.adx;
+    // 日线ADX>50时强制跟随日线方向，1h回测的反转信号不适用
+    if (bt.optimalStrategy === "reversal" && dailyAdx > 50) {
+      bt.optimalStrategy = "continuation";
+      bt.confidence = Math.min(100, bt.confidence + 20);
+      logger.info(`[BT] ${sym}: 日线ADX${dailyAdx.toFixed(0)}>50, 回测反转→延续`);
+    }
     // 行情六类分类
     const regime = classifyRegime(dailyAdx, dailyUp, p, id.ema20, id.ema50);
     // 强趋势(ADX>50)用EMA20，普通趋势用EMA50，确保价格有机会触到
