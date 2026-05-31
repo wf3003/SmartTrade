@@ -2,7 +2,10 @@ node_modules/
 data/quantmax.db
 data/quantmax.db-wal
 data/quantmax.db-shm
+data/*.bak
 .env
 *.log
 dist/
 .deepseek/
+sessions/
+check_db.*
