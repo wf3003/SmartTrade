@@ -202,12 +202,13 @@ export async function generateStrategyReport(
           re = `${regime}/突破${entryMaName}观望`;
         }
       } else if (es.has(sym)) {
-        // 加仓：已有持仓 + 延续模式 + 浮盈 + 回踩入场位
+        // 加仓：最多2次, 每次30%仓位, 需浮盈+回踩
         const pnl = positions.find(p=>p.symbol===sym)?.unrealizedPnlPct||0;
-        if (bt.optimalStrategy==="continuation" && pnl>0 && Math.abs(maDist)<=entryBand*0.6) {
+        const posCount = positions.filter(p=>p.symbol===sym).length;
+        if (bt.optimalStrategy==="continuation" && pnl>0 && posCount<3 && Math.abs(maDist)<=entryBand*0.6) {
           sc = 5 + Math.round(at*3);
           sig = regime.includes("多")?"buy":"sell";
-          re = `${regime}/浮盈${pnl.toFixed(1)}%加仓/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
+          re = `${regime}/加仓${posCount+1}/3 浮盈${pnl.toFixed(1)}%/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
           cf = 0.55;
         } else {
           re = `${regime}/已有持仓持有中`;
@@ -271,6 +272,9 @@ export async function generateStrategyReport(
       else if (mq >= 40) { adjPct = Math.round(basePct * 0.6); adjLeverage = dynLeverage > 6 ? dynLeverage - 2 : dynLeverage; }  // 中等 → 60%
       else if (mq >= 20) { adjPct = Math.round(basePct * 0.4); adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 40%
       else { sig = "hold"; sc = 0; re = `低行情质量(mq${mq})，跳过`; }  // 很差 → 跳过
+      // 加仓信号仓位缩到30%
+      const isAdd = re.includes("加仓");
+      if (isAdd && sig !== "hold") adjPct = Math.round(adjPct * 0.3);
       // 反转模式下，K线质量高→信心加，低→信心减（不完全拦截）
       if (sig !== "hold" && bt.optimalStrategy === "reversal") {
         const lastCandle = o?.["1h"]?.[o["1h"].length - 1];
