@@ -204,7 +204,8 @@ export async function generateStrategyReport(
       } else if (es.has(sym)) {
         // 加仓：最多2次, 每次30%仓位, 需浮盈+回踩
         const pnl = positions.find(p=>p.symbol===sym)?.unrealizedPnlPct||0;
-        const posCount = positions.filter(p=>p.symbol===sym).length;
+        const sideKey = regime.includes("多")?"long":"short";
+        const posCount = positions.filter(p=>p.symbol===sym && p.side===sideKey).length;
         if (bt.optimalStrategy==="continuation" && pnl>0 && posCount<3 && Math.abs(maDist)<=entryBand*0.6) {
           sc = 5 + Math.round(at*3);
           sig = regime.includes("多")?"buy":"sell";
