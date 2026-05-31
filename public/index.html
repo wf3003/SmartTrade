@@ -199,7 +199,8 @@ async function refresh(){
       const strengthLabel={strong:"强",moderate:"中",weak:"弱"};
       $("ana-table").innerHTML=ana.map(a=>{
         const cs=a.score>3?"green":a.score<-3?"red":"yellow";
-        return `<tr><td><b>${a.symbol}</b></td><td class="${cs}" style="min-width:90px;white-space:nowrap">${trendLabel[a.trend]||"?"} ${strengthLabel[a.strength]||a.strength||"?"}</td><td class="num ${cs}"><b>${a.score>=0?"+":""}${a.score}</b></td><td>${a.analysis_1m||"-"}</td><td>${a.analysis_5m||"-"}</td><td>${a.analysis_15m||"-"}</td><td>${a.analysis_1h||"-"}</td><td>${a.analysis_1d||"-"}</td><td style="color:#d2991d">${a.keyLevels||"-"}</td></tr>`;
+        const scoreDisplay = a.score >= 0 ? `+${a.score}` : `负${-a.score}`;
+        return `<tr><td><b>${a.symbol}</b></td><td class="${cs}" style="min-width:90px;white-space:nowrap">${trendLabel[a.trend]||"?"} ${strengthLabel[a.strength]||a.strength||"?"}</td><td class="num ${cs}"><b>${scoreDisplay}</b></td><td>${a.analysis_1m||"-"}</td><td>${a.analysis_5m||"-"}</td><td>${a.analysis_15m||"-"}</td><td>${a.analysis_1h||"-"}</td><td>${a.analysis_1d||"-"}</td><td style="color:#d2991d">${a.keyLevels||"-"}</td></tr>`;
       }).join("");
     }
 
