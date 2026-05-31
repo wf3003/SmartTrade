@@ -31,5 +31,22 @@ export default {
       watch: false,
       time: true,
     },
+    {
+      name: "smarttrade2",
+      script: "npx",
+      args: "tsx --env-file=.env src/index.ts",
+      cwd: ".",
+      env: {
+        NODE_ENV: "production",
+      },
+      error_file: "data/logs/pm2-error-2.log",
+      out_file: "data/logs/pm2-out-2.log",
+      merge_logs: true,
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
+      autorestart: true,
+      max_restarts: 5,
+      watch: false,
+      time: true,
+    },
   ],
 };
