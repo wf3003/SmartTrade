@@ -312,8 +312,15 @@ export async function generateStrategyReport(
     const maDist = (t.price - i.ema20) / i.ema20 * 100;
     const posBt = btMap.get(pos.symbol);
 
+    // 回测方向与持仓方向相反 → 趋势反转，平仓
+    const pnl = pos.unrealizedPnlPct || 0;
+    const btDir = posBt?.optimalStrategy === "continuation" ? 1 : posBt?.optimalStrategy === "reversal" ? -1 : 0;
+    const posDir = pos.side === "long" ? 1 : -1;
+    if (btDir !== 0 && btDir !== posDir) {
+      ac = "close";
+      rr = `回测${posBt?.optimalStrategy}与持仓${pos.side}方向相反, 平仓(${pnl.toFixed(1)}%)`;
+    } else {
     // 用回测结果调整极端行情检测：延续模式不轻易平仓
-    // ADX > 55 极端趋势中跳过平仓检测，让趋势跑完
     const skipClose = posBt?.optimalStrategy === "continuation" && (i.adx > 55);
     const atrMult = posBt?.optimalStrategy === "continuation" ? 4 : 2.5;
     const extreme = skipClose ? { hit: false as const, label: "", detail: "" } : checkExtremeDeviation(maDist, at, i.rsi14, pos.side, atrMult);
@@ -332,6 +339,7 @@ export async function generateStrategyReport(
         rr = "持有中";
       }
     }
+    } // 关闭回测方向相反的else块
     pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
   }
   // 市场偏向修正（BTC权重翻倍）：一方占比≥2/3才算主导，否则均衡不做修正
