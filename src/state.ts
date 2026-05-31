@@ -145,11 +145,7 @@ export function applyBlockSignals(blockSignals: string): void {
 
 /** 启动时强制覆盖硬性惩罚（不受旧持久化数据干扰） */
 export function ensureHardPenalties(): void {
-  const cur = signalScorePenalty.get("追空") ?? 0;
-  if (cur < 8) {
-    signalScorePenalty.set("追空", 8);
-    logger.info(`⚙️ 启动覆盖→追空信号惩罚: ${cur}→8分`);
-  }
+  // 追空惩罚由AI+回测决定，不再硬编码扣8分
   if (!signalScorePenalty.has("sync_rebuild")) {
     signalScorePenalty.set("sync_rebuild", 4);
     signalScorePenalty.set("sync_closed", 4);
