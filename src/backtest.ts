@@ -110,14 +110,13 @@ export function runBacktest(
 
   const adxRegime = avgADX > 35 ? "极端趋势" : avgADX > 22 ? "弱趋势/震荡" : "纯震荡";
 
-  // 决策逻辑
-  if (avgADX > 40 && contRate > revRate + 5 && contRate > 50) {
-    return { optimalStrategy: "continuation", adxRegime, confidence: Math.round(60 + contRate - revRate), revAccuracy: revRate, contAccuracy: contRate, avgADX };
+  // 决策逻辑：延续优势大 → 延续；反转优势大 → 反转；否则默认反转
+  if (contRate > revRate + 5 && contRate > 50) {
+    return { optimalStrategy: "continuation", adxRegime, confidence: Math.round(60 + contRate - revRate + (avgADX > 40 ? 10 : 0)), revAccuracy: revRate, contAccuracy: contRate, avgADX };
   }
   if (revRate > contRate + 5) {
     return { optimalStrategy: "reversal", adxRegime, confidence: Math.round(60 + revRate - contRate), revAccuracy: revRate, contAccuracy: contRate, avgADX };
   }
-  // 默认反转
   return { optimalStrategy: "reversal", adxRegime, confidence: Math.round(55 + Math.abs(revRate - contRate)), revAccuracy: revRate, contAccuracy: contRate, avgADX };
 }
 
