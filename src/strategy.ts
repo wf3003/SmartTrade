@@ -1,6 +1,6 @@
 import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
-import { calcIndicators, calcMarketQuality, checkExtremeDeviation } from "./indicators";
+import { calcIndicators, calcMarketQuality, checkExtremeDeviation, convertCandles } from "./indicators";
 import { setAtrCache, setRsiCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor } from "./state";
 import { logger } from "./logger";
 import { runBacktest, generateBacktestSummary, isHighQualitySignal, type BacktestResult } from "./backtest";
@@ -13,7 +13,6 @@ interface CoinSignal { symbol: string; regime: string; score: number; trend: str
 interface PCmd { symbol: string; action: S | "close" | "close_partial"; closePercent?: number; reason: string; confidence: number; }
 export interface StrategyReport { analysis: CoinSignal[]; positions: PCmd[]; newTrades: TradeSignal[]; summary: string; execution?: { log: string[] }; backtestSummaries?: string[]; }
 
-function ca(d: { open: number; high: number; low: number; close: number }[]): number[][] { return d.map(c => [0, 0, c.high, c.low, c.close, 0]); }
 function ch(d?: { open: number; high: number; low: number; close: number }[]): string { if (!d || d.length < 2) return ""; const p = ((d[d.length-1].close - d[0].close) / d[0].close * 100); return (p >= 0 ? "涨" : "跌") + Math.abs(p).toFixed(2) + "%"; }
 /** ADX → 中文趋势强度 */
 function adxDesc(adx: number): string {
@@ -48,7 +47,7 @@ export async function generateStrategyReport(
   for (const sym of CONFIG.symbols) {
     const t = tickers.get(sym); if (!t) continue;
     const o = ohlcv.get(sym);
-    const c1h = o?.["1h"] ? ca(o["1h"]) : [], c1d = o?.["1d"] ? ca(o["1d"]) : [];
+    const c1h = o?.["1h"] ? convertCandles(o["1h"]) : [], c1d = o?.["1d"] ? convertCandles(o["1d"]) : [];
     const p = t.price, i1 = calcIndicators(c1h), id = calcIndicators(c1d);
     const m1 = ch(o?.["1m"]), m5 = ch(o?.["5m"]), m15 = ch(o?.["15m"]);
     if (!i1 || !id) { a.push({ symbol: sym, regime: "数据不足", score: 0, trend: "neutral", strength: "weak", keyLevels: "", summary: "数据不足", analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: "", analysis_1d: "" }); continue; }
@@ -58,11 +57,11 @@ export async function generateStrategyReport(
     setRsiCache(sym, i1.rsi14);
 
     // ── 实时回测：多周期扫描，选最优 ──
-    const tfMap = { "5m": o?.["5m"], "15m": o?.["15m"], "30m": o?.["30m"], "1h": o?.["1h"] };
+    const tfMap = { "5m": o?.["5m"], "15m": o?.["15m"], "30m": o?.["30m"], "1h": o?.["1h"], "4h": o?.["4h"] };
     let bestBt: BacktestResult | null = null;
     let bestTf = "5m";
     for (const [tf, raw] of Object.entries(tfMap)) {
-      const arr = raw ? ca(raw) : [];
+      const arr = raw ? convertCandles(raw) : [];
       if (arr.length < 40) continue;
       const bt = runBacktest(arr.map(x => x[4]), arr.map(x => x[2]), arr.map(x => x[3]));
       if (!bestBt || Math.abs(bt.revAccuracy - bt.contAccuracy) > Math.abs(bestBt.revAccuracy - bestBt.contAccuracy)) {
@@ -202,6 +201,7 @@ export async function generateStrategyReport(
           re = `${regime}/突破${entryMaName}观望`;
         }
       } else {
+        // TODO: 加仓功能 — 需先改DB为流水账模式(每条操作新增,不覆盖)
         re = `${regime}/已有持仓持有中`;
       }
     } else {
@@ -250,10 +250,8 @@ export async function generateStrategyReport(
       );
       // 行情质量评分 → 动态调整仓位/杠杆/信心
       const raw1h = o?.["1h"] || [], raw15m = o?.["15m"] || [], raw5m = o?.["5m"] || [];
-      const cvt = (d: {open:number;high:number;low:number;close:number}[]) =>
-        d.map(x => [0, x.open, x.high, x.low, x.close, 0] as number[]);
       const fr = t.fundingRate !== undefined ? Math.abs(Number(t.fundingRate)) : 0;
-      const mq = calcMarketQuality(cvt(raw1h), cvt(raw15m), cvt(raw5m), fr);
+      const mq = calcMarketQuality(convertCandles(raw1h), convertCandles(raw15m), convertCandles(raw5m), fr);
       const basePct = CONFIG.basePositionPct;
       let adjPct = basePct, adjLeverage = dynLeverage;
       if (mq >= 70) { adjPct = basePct; }                              // 高质量 → 满仓
@@ -305,7 +303,7 @@ export async function generateStrategyReport(
   const pc: PCmd[] = [];
   for (const pos of positions) {
     const t = tickers.get(pos.symbol); if (!t) continue;
-    const o = ohlcv.get(pos.symbol); const c = o?.["1h"] ? ca(o["1h"]) : []; const i = calcIndicators(c);
+    const o = ohlcv.get(pos.symbol); const c = o?.["1h"] ? convertCandles(o["1h"]) : []; const i = calcIndicators(c);
     if (!i) { pc.push({ symbol: pos.symbol, action: "hold", reason: "数据不足", confidence: 0.5 }); continue; }
     let ac: "hold" | "close" | "close_partial" = "hold", rr = "";
     const at = i.atr14 / t.price * 100;

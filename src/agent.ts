@@ -4,7 +4,7 @@
  */
 import { CONFIG } from "./config";
 import { logger } from "./logger";
-import { getTradeStats } from "./db";
+import { getTradeStats, getPartialClosePct } from "./db";
 import { openai } from "./ai-client";
 import type { MarketData, Position, AccountInfo } from "./exchanges";
 
@@ -63,7 +63,7 @@ function buildPrompt(
   const posLines = positions.length > 0
     ? positions.map(p => {
         const db = openTrades.find((t: any) => t.symbol === p.symbol);
-        const partial = db?.partial_close_pct || 0;
+        const partial = db ? getPartialClosePct(db.id as number, db.entry_qty as number) : 0;
         return `${p.symbol} ${p.side} | 入场:$${p.entryPrice?.toFixed(2)} | PnL:${p.unrealizedPnlPct?.toFixed(2)}% | 保证金:$${p.margin?.toFixed(2)} | 已分批:${partial}%`;
       }).join("\n")
     : "无持仓";

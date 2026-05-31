@@ -224,10 +224,11 @@ class ExchangeManager {
    * 批量获取多时间框架数据
    */
   async getMultiTimeframeData(symbol: string): Promise<Record<string, { open: number; high: number; low: number; close: number; }[]>> {
-    const frames = ["1m", "5m", "15m", "1h", "1d"];
+    const frames = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
     const results: Record<string, any> = {};
     for (const tf of frames) {
-      const limit = tf === "1h" || tf === "1d" ? 60 : 12;
+      // 统一拉 60 根，保证各周期都能跑回测(需≥40根)
+      const limit = 60;
       const data = await this.getOHLCV(symbol, tf, limit);
       if (data) results[tf] = data.candles;
     }

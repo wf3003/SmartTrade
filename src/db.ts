@@ -36,7 +36,8 @@ db.exec(`
     status TEXT DEFAULT 'open',
     reason TEXT,
     close_type TEXT,
-    partial_close_pct REAL DEFAULT 0
+    partial_close_pct REAL DEFAULT 0,
+    parent_id INTEGER DEFAULT NULL
   );
 
   CREATE TABLE IF NOT EXISTS decisions (
@@ -86,6 +87,7 @@ try { db.exec("ALTER TABLE trades ADD COLUMN peak_pnl_pct REAL DEFAULT 0"); } ca
 try { db.exec("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_qty REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_pnl REAL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE trades ADD COLUMN parent_id INTEGER DEFAULT NULL"); } catch {}
 // 回测日志（每个决策周期，每个币种一条）
 db.exec(`
   CREATE TABLE IF NOT EXISTS backtest_logs (
@@ -211,12 +213,35 @@ export function insertTrade(t: {
   `).run(t.exchange, t.symbol, t.side, t.leverage, t.entry_price, t.entry_qty, t.entry_time, t.reason, t.notional || 0, t.margin || 0, t.entry_fee || 0);
 }
 
+/** 流水账减仓记录（INSERT，不改原记录状态） */
+export function insertPartialCloseRecord(t: {
+  parent_id: number; exchange: string; symbol: string; side: string; leverage: number;
+  entry_price: number; entry_qty: number; entry_time: string; reason: string;
+  exit_price: number; exit_qty: number; pnl: number; pnl_pct: number; fee: number;
+}) {
+  return db.prepare(`
+    INSERT INTO trades (exchange, symbol, side, leverage, entry_price, entry_qty, entry_time, reason, status,
+      exit_price, exit_qty, exit_time, pnl, pnl_pct, fee, close_type, parent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'partial_closed', ?, ?, ?, ?, ?, ?, 'partial_close', ?)
+  `).run(t.exchange, t.symbol, t.side, t.leverage, t.entry_price, t.entry_qty, t.entry_time, t.reason,
+    t.exit_price, t.exit_qty, new Date().toISOString(), t.pnl, t.pnl_pct, t.fee, t.parent_id);
+}
+
 export function closeTrade(id: number, exitPrice: number, exitQty: number, pnl: number, pnlPct: number, fee: number, closeType: string) {
   const now = new Date().toISOString();
   return db.prepare(`
     UPDATE trades SET exit_price=?, exit_qty=?, exit_time=?, pnl=?, pnl_pct=?, fee=?, status='closed', close_type=?
     WHERE id=?
   `).run(exitPrice, exitQty, now, pnl, pnlPct, fee, closeType, id);
+}
+
+/** 从流水账减仓记录计算某笔交易的已减仓比例 */
+export function getPartialClosePct(tradeId: number, totalQty: number): number {
+  if (totalQty <= 0) return 0;
+  const row = db.prepare(
+    "SELECT COALESCE(SUM(entry_qty), 0) as closed FROM trades WHERE parent_id=? AND close_type='partial_close'"
+  ).get(tradeId) as any;
+  return Math.round((row?.closed || 0) / totalQty * 100);
 }
 
 export function updatePartialClose(id: number, pct: number, qty?: number, pnl?: number) {

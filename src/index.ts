@@ -26,7 +26,7 @@ import {
   insertTrade, 
   insertSnapshot,
   closeTrade,
-  updatePartialClose,
+  insertPartialCloseRecord,
   getOpenPositionPeakPnlMap,
   updatePeakPnlInDb,
   getTradesHistory,
@@ -129,7 +129,7 @@ async function executeFullClose(
   return { closeResult };
 }
 
-/** 统一部分平仓：记录分批比例，满100%后完成关闭 */
+/** 统一部分平仓：流水账模式 — INSERT 减仓记录，不改原记录状态 */
 async function executePartialClose(
   symbol: string,
   side: "long" | "short",
@@ -139,21 +139,34 @@ async function executePartialClose(
 ): Promise<{ closeResult: any; newPct: number; partialPnl: number }> {
   const closeResult = await exchangeManager.closePosition(symbol, side, qty);
   if (!dbTrade) {
-    logger.warn(`  ⚠️ ${symbol} 部分平仓缺少DB记录，无法跟踪分批进度`);
+    logger.warn(`  ⚠️ ${symbol} 部分平仓缺少DB记录，无法记录减仓`);
     return { closeResult, newPct: 0, partialPnl: 0 };
   }
-  const newPct = (dbTrade.partial_close_pct || 0) + closePercent;
   const partialPnl = closeResult.avgPrice > 0
     ? (side === "long" ? (closeResult.avgPrice - dbTrade.entry_price) : (dbTrade.entry_price - closeResult.avgPrice)) * qty
     : 0;
-  updatePartialClose(dbTrade.id, newPct, qty, partialPnl);
+  // 流水账：INSERT 减仓记录，不改原记录状态（防同步逻辑误重建）
+  const actualPnlPct = closeResult.avgPrice > 0 && dbTrade
+    ? (side === "long" ? (closeResult.avgPrice - dbTrade.entry_price) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1) : (dbTrade.entry_price - closeResult.avgPrice) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1))
+    : 0;
+  insertPartialCloseRecord({
+    parent_id: dbTrade.id as number,
+    exchange: CONFIG.exchanges[0],
+    symbol, side, leverage: dbTrade.leverage || 1,
+    entry_price: dbTrade.entry_price,
+    entry_qty: qty,
+    entry_time: new Date().toISOString(),
+    reason: "ai_partial_close",
+    exit_price: closeResult.avgPrice || 0,
+    exit_qty: qty,
+    pnl: partialPnl,
+    pnl_pct: actualPnlPct,
+    fee: closeResult.fee || 0,
+  });
   partialCloseMap.delete(symbol);
-  if (newPct >= 100) {
-    openedThisSession.delete(symbol);
-    closeTrade(dbTrade.id, 0, dbTrade.entry_qty, 0, 0, closeResult.fee || 0, "ai_close_partial");
-  }
   applyCloseCooldown(symbol, partialPnl);
-  return { closeResult, newPct, partialPnl };
+  logger.info(`  📝 流水账: ${symbol} 减仓${qty}张 PnL=$${partialPnl.toFixed(2)} (parent=${dbTrade.id})`);
+  return { closeResult, newPct: 50, partialPnl };
 }
 
 /** 统一开仓：交易所开仓 → DB插入 → 状态跟踪 */
@@ -179,8 +192,6 @@ async function executeFullOpen(
       notional, margin: notional / leverage,
       entry_fee: openResult.fee || 0,
     });
-    // 关掉同币种其他open记录（避免sync_rebuild幽灵记录残留）
-    try { db.prepare("UPDATE trades SET status='replaced' WHERE symbol=? AND status='open' AND id!=(SELECT MAX(id) FROM trades WHERE symbol=? AND status='open')").run(symbol, symbol); } catch {}
     logger.warn(`✅ 开仓: ${symbol} ${side} ${qty}张 @$${fillPrice} ${leverage}x`);
     return { success: true, fillPrice };
   } catch (e: any) {

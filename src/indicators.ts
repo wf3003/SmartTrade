@@ -146,6 +146,65 @@ function calcADX(high: number[], low: number[], close: number[], p: number): num
   return dxValues.slice(-p).reduce((a, b) => a + b, 0) / p;
 }
 
+// ========== K线格式转换 ==========
+
+/** {open,high,low,close}[] → ccxt 标准 number[][] */
+export function convertCandles(d: { open: number; high: number; low: number; close: number }[]): number[][] {
+  return d.map(x => [0, x.open, x.high, x.low, x.close, 0]);
+}
+
+// ========== 数组版 EMA（返回完整序列）==========
+
+/** 返回完整 EMA 数组，SMA(p) 做初始值 */
+export function calcEMAArray(values: number[], period: number): number[] {
+  const result: number[] = [];
+  const k = 2 / (period + 1);
+  let e = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  result.push(e);
+  for (let i = period; i < values.length; i++) {
+    e = values[i] * k + e * (1 - k);
+    result.push(e);
+  }
+  return result;
+}
+
+// ========== True Range 数组 ==========
+
+/** 返回 TR 数组（长度 = highs.length - 1） */
+export function calcTR(highs: number[], lows: number[], closes: number[]): number[] {
+  const tr: number[] = [];
+  for (let i = 1; i < highs.length; i++) {
+    tr.push(Math.max(highs[i] - lows[i],
+      Math.abs(highs[i] - closes[i - 1]),
+      Math.abs(lows[i] - closes[i - 1])));
+  }
+  return tr;
+}
+
+// ========== 标准 ADX（Wilder 平滑法）==========
+
+/** 标准 ADX(14)：用 EMA 平滑 +DI/-DI 后计算 DX 再平滑一次 */
+export function calcADXFull(highs: number[], lows: number[], closes: number[], period = 14): number {
+  const n = Math.min(closes.length, 60);
+  if (n < period + 1) return 20;
+  const pdm: number[] = [0], mdm: number[] = [0], tr: number[] = [0];
+  const si = Math.max(0, closes.length - n);
+  for (let i = si + 1; i < closes.length; i++) {
+    const hd = highs[i] - highs[i - 1], ld = lows[i - 1] - lows[i];
+    pdm.push(hd > ld && hd > 0 ? hd : 0);
+    mdm.push(ld > hd && ld > 0 ? ld : 0);
+    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  }
+  const str = calcEMAArray(tr, period);
+  const spdm = calcEMAArray(pdm, period);
+  const smdm = calcEMAArray(mdm, period);
+  const pdi = str.map((t, i) => t > 0 ? 100 * spdm[i] / t : 0);
+  const mdi = str.map((t, i) => t > 0 ? 100 * smdm[i] / t : 0);
+  const dx = pdi.map((p, i) => { const s = p + mdi[i]; return s > 0 ? 100 * Math.abs(p - mdi[i]) / s : 0; });
+  const adxarr = calcEMAArray(dx, period);
+  return adxarr[adxarr.length - 1] || 20;
+}
+
 // ========== 超涨 / 超跌检查 ==========
 
 export interface ExtremeDeviation {

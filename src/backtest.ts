@@ -9,44 +9,7 @@
  *   · 极端行情 → 延续策略胜率 54-64%（跟趋势方向）
  *   · 过滤器: 实体>0.5ATR + 收盘极端 → 准确率最高
  */
-
-// ========== 辅助 ==========
-function ema(values: number[], period: number): number[] {
-  const result: number[] = [], k = 2 / (period + 1);
-  let e = values[0]; result.push(e);
-  for (let i = 1; i < values.length; i++) { e = values[i] * k + e * (1 - k); result.push(e); }
-  return result;
-}
-
-function calcTR(highs: number[], lows: number[], closes: number[]): number[] {
-  const tr: number[] = [];
-  for (let i = 1; i < highs.length; i++) {
-    tr.push(Math.max(highs[i] - lows[i],
-      Math.abs(highs[i] - closes[i - 1]),
-      Math.abs(lows[i] - closes[i - 1])));
-  }
-  return tr;
-}
-
-// 简化版 ADX(14)：用 EMA 平滑后的 +DI/-DI 差
-function calcADX(closes: number[], highs: number[], lows: number[], period = 14): number {
-  const n = Math.min(closes.length, 60);
-  if (n < period + 1) return 20;
-  const pdm: number[] = [0], mdm: number[] = [0], tr: number[] = [0];
-  const si = Math.max(0, closes.length - n);
-  for (let i = si + 1; i < closes.length; i++) {
-    const hd = highs[i] - highs[i - 1], ld = lows[i - 1] - lows[i];
-    pdm.push(hd > ld && hd > 0 ? hd : 0);
-    mdm.push(ld > hd && ld > 0 ? ld : 0);
-    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
-  }
-  const str = ema(tr, period), spdm = ema(pdm, period), smdm = ema(mdm, period);
-  const pdi = str.map((t, i) => t > 0 ? 100 * spdm[i] / t : 0);
-  const mdi = str.map((t, i) => t > 0 ? 100 * smdm[i] / t : 0);
-  const dx = pdi.map((p, i) => { const s = p + mdi[i]; return s > 0 ? 100 * Math.abs(p - mdi[i]) / s : 0; });
-  const adxarr = ema(dx, period);
-  return adxarr[adxarr.length - 1] || 20;
-}
+import { calcEMAArray, calcTR, calcADXFull } from "./indicators";
 
 // ========== 回测 ==========
 export interface BacktestResult {
@@ -67,16 +30,16 @@ export function runBacktest(
   if (n < 40) return { optimalStrategy: "reversal", adxRegime: "数据不足", confidence: 50, revAccuracy: 0, contAccuracy: 0, avgADX: 0 };
 
   // 计算 EMA12/26 作为趋势方向代理
-  const e12 = ema(closes, 12);
-  const e26 = ema(closes, 26);
+  const e12 = calcEMAArray(closes, 12);
+  const e26 = calcEMAArray(closes, 26);
 
   // 计算 TR 和近似的 ATR
   const tr = calcTR(highs, lows, closes);
   const atrLen = Math.min(14, tr.length);
-  const atr = ema(tr, atrLen);
+  const atr = calcEMAArray(tr, atrLen);
 
   // ADX(14) 用 +DI/-DI 真实计算
-  const avgADX = calcADX(closes, highs, lows, 14);
+  const avgADX = calcADXFull(highs, lows, closes, 14);
 
   // 回测最近约60个数据点的延续vs反转表现
   const testStart = Math.max(35, n - 90);
