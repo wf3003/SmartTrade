@@ -312,8 +312,16 @@ export async function generateStrategyReport(
     const maDist = (t.price - i.ema20) / i.ema20 * 100;
     const posBt = btMap.get(pos.symbol);
 
-    // 回测为"反转"模式 → 市场震荡，不平仓，平仓
+    // 短期动量：最后5根K线持续反向 + 浮亏 → 趋势可能转坏
     const pnl = pos.unrealizedPnlPct || 0;
+    const flip = c.length > 25 && (
+      (pos.side === "long" && c[c.length-1][4] < c[c.length-6][4] && pnl < -1) ||
+      (pos.side === "short" && c[c.length-1][4] > c[c.length-6][4] && pnl < -1)
+    );
+    if (flip) {
+      ac = "close";
+      rr = `5根K线趋势转向, 平仓(${pnl.toFixed(1)}%)`;
+    } else
     if (posBt?.optimalStrategy === "reversal") {
       ac = "close";
       rr = `回测反转模式, 平仓(${pnl.toFixed(1)}%)`;
