@@ -537,9 +537,10 @@ async function aiDecisionCycle() {
           const analysis = report.analysis?.find((a: any) => a.symbol === p.symbol);
           const atr = (atrCache.get(p.symbol) || 0.015) * 100;
           const rsi = rsiCache.get(p.symbol) || 50;
+          const btLine = (report.backtestSummaries || []).find((l: string) => l.startsWith(p.symbol)) || "";
           const pc = report.positions?.find((c: any) => c.symbol === p.symbol);
-          const stratAdvice = pc && pc.action !== "hold" ? ` [策略建议:${pc.action} ${pc.reason}]` : "";
-          return `${p.symbol} ${p.side} PnL:${(p.unrealizedPnlPct||0).toFixed(1)}% 杠杆${p.leverage}x | RSI${rsi.toFixed(0)} ATR${atr.toFixed(1)}% | 趋势:${analysis?.trend||"?"}(${analysis?.strength||"?"})${stratAdvice}`;
+          const stratAdvice = pc && pc.action !== "hold" ? ` [策略建议:${pc.action}]` : "";
+          return `${p.symbol} ${p.side} PnL:${(p.unrealizedPnlPct||0).toFixed(1)}% ${p.leverage}x RSI${rsi.toFixed(0)} ATR${atr.toFixed(1)}% ${btLine}${stratAdvice}`;
         }).join("\n")
       : "无";
     aiResult = await aiDirectionCheck(report.newTrades, tickerIndicators, posLines, (report.backtestSummaries || []).join("\n"));
