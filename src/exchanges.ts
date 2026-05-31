@@ -444,11 +444,7 @@ class ExchangeManager {
     const { client, swapSymbol } = found;
     const orderSide = side === "long" ? "sell" : "buy";
     const params: any = { reduceOnly: true, tdMode: "isolated" };
-    // OKX 单向持仓不传 posSide（双向持仓时取消下面注释）
-    // if (client.id === "okx" || client.id === "gate") {
-    //   params.posSide = side;
-    // }
-    let pSide = side;
+    // 双向持仓模式需要 posSide，先不带试一次
     try {
       const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
       const avgPrice = order?.price || order?.average || 0;
@@ -456,7 +452,24 @@ class ExchangeManager {
       return { order, avgPrice, fee };
     } catch (e: any) {
       const msg = e.message || String(e);
-      // 51000posSide不支持 → 摘掉重试
+      // 51000: 双向持仓需要 posSide → 补上重试
+      if (msg.includes("51000") && !params.posSide) {
+        params.posSide = side;
+        try {
+          const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
+          return { order, avgPrice: order?.price || order?.average || 0, fee: order?.fee?.cost || 0 };
+        } catch (e2: any) {
+          const msg2 = e2.message || String(e2);
+          // 加上 posSide 还是 51000 → 摘掉再试
+          if (msg2.includes("51000") && params.posSide) {
+            delete params.posSide;
+            const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
+            return { order, avgPrice: order?.price || order?.average || 0, fee: order?.fee?.cost || 0 };
+          }
+          throw e2;
+        }
+      }
+      // 51000 且已带 posSide → 摘掉重试
       if (msg.includes("51000") && params.posSide) {
         delete params.posSide;
         const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
