@@ -115,8 +115,8 @@ async function executeFullClose(
   if (actualPnlPct < 1) {
     const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
     consecutiveStopCount.set(symbol, cnt);
-    stopCooldown.set(symbol, Date.now());
     const dynMin = getDynamicCooldown(symbol);
+    stopCooldown.set(symbol, Date.now() + dynMin * 60000);
     logger.warn(`  ⏸️ ${symbol} 亏损平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
   }
   // 标记为最近关闭，防止监控同步误重建
