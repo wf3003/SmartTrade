@@ -84,9 +84,13 @@ ${backtestData || "无回测数据"}
    - 回测置信度>65%时，评分应尊重回测结论
 
 格式：
-{"signals":[{"symbol":"BTC/USDT","score":85,"reason":"ADX高位RSI合理"},...],
+{"signals":[{"symbol":"BTC/USDT","score":85,"reason":"(回测:延续 cf80%) ADX高位RSI合理, 费率中性, 量正常"},...],
  "positions":[{"symbol":"ETH/USDT","action":"hold","reason":"趋势完好"},...],
- "market_quality":65}`;
+ "market_quality":65}
+
+reason字段格式: (回测:延续/反转 cfXX%) 核心判断, 费率XX%, 量状态
+例: (回测:延续 cf77%) 回踩EMA20, 费率-0.008%偏空, 量萎缩→谨慎做多
+必须明确引用回测结论+费率方向+量状态, 不要省略。`;
 
   try {
     const resp = await openai.chat.completions.create({
