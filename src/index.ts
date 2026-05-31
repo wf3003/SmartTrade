@@ -85,6 +85,17 @@ const _halfClosed = new Set<string>();
 
 // ========== 统一开仓 / 关仓函数 ==========
 
+/** 统一冷却管理：全平/减半共用，利润<1%就触发冷却 */
+function applyCloseCooldown(symbol: string, pnlPct: number): void {
+  if (pnlPct < 1) {
+    const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
+    consecutiveStopCount.set(symbol, cnt);
+    const dynMin = getDynamicCooldown(symbol);
+    stopCooldown.set(symbol, Date.now() + dynMin * 60000);
+    logger.warn(`  ⏸️ ${symbol} 平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
+  }
+}
+
 /** 统一关仓：交易所平仓 → DB记录 → 状态清理 → 亏损冷却 */
 async function executeFullClose(
   symbol: string,
@@ -111,14 +122,7 @@ async function executeFullClose(
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
-  // 冷却：平仓盈亏<1%（含亏损和微利）都触发，走统一阶梯15/60/240分钟
-  if (actualPnlPct < 1) {
-    const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
-    consecutiveStopCount.set(symbol, cnt);
-    const dynMin = getDynamicCooldown(symbol);
-    stopCooldown.set(symbol, Date.now() + dynMin * 60000);
-    logger.warn(`  ⏸️ ${symbol} 亏损平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
-  }
+  applyCloseCooldown(symbol, actualPnlPct);
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
   setTimeout(() => _recentlyClosed.delete(symbol), 30000);
@@ -148,14 +152,7 @@ async function executePartialClose(
     openedThisSession.delete(symbol);
     closeTrade(dbTrade.id, 0, dbTrade.entry_qty, 0, 0, closeResult.fee || 0, "ai_close_partial");
   }
-  // 微利（<0.5%）部分平仓也触发冷却（防频繁开关）
-  if (partialPnl < 0.5) {
-    const cnt = consecutiveStopCount.get(symbol) || 0;
-    consecutiveStopCount.set(symbol, cnt + 1);
-    const cd = getDynamicCooldown(symbol);
-    stopCooldown.set(symbol, Date.now() + cd * 60000);
-    logger.warn(`  ⏸️ ${symbol} 微利减仓触发冷却 ${cd}分钟 (连续${cnt+1}次)`);
-  }
+  applyCloseCooldown(symbol, partialPnl);
   return { closeResult, newPct, partialPnl };
 }
 
