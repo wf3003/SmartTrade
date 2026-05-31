@@ -246,14 +246,15 @@ export async function generateStrategyReport(
       else if (mq >= 40) { adjPct = Math.round(basePct * 0.6); adjLeverage = dynLeverage > 6 ? dynLeverage - 2 : dynLeverage; }  // 中等 → 60%
       else if (mq >= 20) { adjPct = Math.round(basePct * 0.4); adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 40%
       else { sig = "hold"; sc = 0; re = `低行情质量(mq${mq})，跳过`; }  // 很差 → 跳过
-      // 反转模式下，用高 K 线质量过滤器提升准确率（实体>0.5ATR+收盘极端）
+      // 反转模式下，K线质量高→信心加，低→信心减（不完全拦截）
       if (sig !== "hold" && bt.optimalStrategy === "reversal") {
         const lastCandle = o?.["1h"]?.[o["1h"].length - 1];
         if (lastCandle) {
           const hq = isHighQualitySignal(lastCandle.open, lastCandle.high, lastCandle.low, lastCandle.close, i1.atr14);
-          if (!hq) {
-            sig = "hold"; sc = 0; cf = 0;
-            re = `${regime}/反转模式+K线质量不足, 跳过`;
+          if (hq) {
+            cf = Math.min(1.0, cf + 0.1);
+          } else {
+            cf = Math.max(0.4, cf - 0.1);
           }
         }
       }
