@@ -256,7 +256,7 @@ async function refresh(){
         a.score !== 0 &&
         !newTrades.some(t => t.symbol === a.symbol) &&
         !skippedResults.some(r => r.symbol === a.symbol)
-      ).map(a => ({ symbol: a.symbol, reason: `score${a.score} — ${a.summary||""}` }));
+      ).map(a => ({ symbol: a.symbol, reason: `评分${a.score>=0?'+'+a.score:'负'+(-a.score)} — ${a.summary||""}` }));
       const runtimeSkipped = skippedResults.map(r => ({ symbol: r.symbol, reason: r.reason || "" }));
       const allSkipped = [...analysisSkipped, ...runtimeSkipped];
       if(allSkipped.length){
