@@ -148,6 +148,14 @@ async function executePartialClose(
     openedThisSession.delete(symbol);
     closeTrade(dbTrade.id, 0, dbTrade.entry_qty, 0, 0, closeResult.fee || 0, "ai_close_partial");
   }
+  // 微利（<0.5%）部分平仓也触发冷却（防频繁开关）
+  if (partialPnl < 0.5) {
+    const cnt = consecutiveStopCount.get(symbol) || 0;
+    consecutiveStopCount.set(symbol, cnt + 1);
+    const cd = getDynamicCooldown(symbol);
+    stopCooldown.set(symbol, Date.now() + cd * 60000);
+    logger.warn(`  ⏸️ ${symbol} 微利减仓触发冷却 ${cd}分钟 (连续${cnt+1}次)`);
+  }
   return { closeResult, newPct, partialPnl };
 }
 
