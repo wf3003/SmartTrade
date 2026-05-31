@@ -307,7 +307,7 @@ export async function generateStrategyReport(
     const t = tickers.get(pos.symbol); if (!t) continue;
     const o = ohlcv.get(pos.symbol); const c = o?.["1h"] ? ca(o["1h"]) : []; const i = calcIndicators(c);
     if (!i) { pc.push({ symbol: pos.symbol, action: "hold", reason: "数据不足", confidence: 0.5 }); continue; }
-    let ac: "hold" | "close" = "hold", rr = "";
+    let ac: "hold" | "close" | "close_partial" = "hold", rr = "";
     const at = i.atr14 / t.price * 100;
     const maDist = (t.price - i.ema20) / i.ema20 * 100;
     const posBt = btMap.get(pos.symbol);
@@ -319,8 +319,8 @@ export async function generateStrategyReport(
       (pos.side === "short" && c[c.length-1][4] > c[c.length-6][4] && pnl < -1)
     );
     if (flip) {
-      ac = "close";
-      rr = `5根K线趋势转向, 平仓(${pnl.toFixed(1)}%)`;
+      ac = "close_partial";
+      rr = `5根K线趋势转向, 减半(${pnl.toFixed(1)}%)`;
     } else
     if (posBt?.optimalStrategy === "reversal") {
       ac = "close";
@@ -345,8 +345,9 @@ export async function generateStrategyReport(
         rr = "持有中";
       }
     }
-    } // 关闭回测方向相反的else块
-    pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
+    }
+    const closePct = ac === ("close_partial" as string) ? 50 : undefined;
+    pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8, closePercent: closePct });
   }
   // 市场偏向修正（BTC权重翻倍）：一方占比≥2/3才算主导，否则均衡不做修正
   const weight = (x: any) => x.symbol === "BTC/USDT" ? 2 : 1;
