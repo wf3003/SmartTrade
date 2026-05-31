@@ -10,6 +10,7 @@ export async function aiTradeReview(
   symbolStats: string,
   strategyConfig: string,
   openPositions: string = "",
+  backtestLog: string = "",
 ): Promise<string> {
   if (!tradeSummary) return "";
 
@@ -18,9 +19,14 @@ ${openPositions}
 
 ` : "";
 
+  const btSection = backtestLog ? `【近期回测趋势】
+${backtestLog}
+
+` : "";
+
   const prompt = `你是一个加密货币交易策略分析师。以下是系统的近期交易记录和策略配置。
 
-${posSection}【策略配置】
+${posSection}${btSection}【策略配置】
 ${strategyConfig}
 
 【逐笔交易明细】
