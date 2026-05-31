@@ -312,13 +312,11 @@ export async function generateStrategyReport(
     const maDist = (t.price - i.ema20) / i.ema20 * 100;
     const posBt = btMap.get(pos.symbol);
 
-    // 回测方向与持仓方向相反 → 趋势反转，平仓
+    // 回测为"反转"模式 → 市场震荡，不平仓，平仓
     const pnl = pos.unrealizedPnlPct || 0;
-    const btDir = posBt?.optimalStrategy === "continuation" ? 1 : posBt?.optimalStrategy === "reversal" ? -1 : 0;
-    const posDir = pos.side === "long" ? 1 : -1;
-    if (btDir !== 0 && btDir !== posDir) {
+    if (posBt?.optimalStrategy === "reversal") {
       ac = "close";
-      rr = `回测${posBt?.optimalStrategy}与持仓${pos.side}方向相反, 平仓(${pnl.toFixed(1)}%)`;
+      rr = `回测反转模式, 平仓(${pnl.toFixed(1)}%)`;
     } else {
     // 用回测结果调整极端行情检测：延续模式不轻易平仓
     const skipClose = posBt?.optimalStrategy === "continuation" && (i.adx > 55);
@@ -332,9 +330,9 @@ export async function generateStrategyReport(
       const reversalClose =
         (pos.side === "long" && pnl > 3 && i.rsi14 > 75) ||
         (pos.side === "short" && pnl > 3 && i.rsi14 < 25);
-      if (posBt?.optimalStrategy === "reversal" && reversalClose) {
+      if (reversalClose) {
         ac = "close";
-        rr = `反转模式+RSI${i.rsi14.toFixed(0)}, 锁利(${pnl.toFixed(1)}%)`;
+        rr = `RSI${i.rsi14.toFixed(0)}, 锁利(${pnl.toFixed(1)}%)`;
       } else {
         rr = "持有中";
       }
