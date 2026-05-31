@@ -28,6 +28,7 @@ export async function aiDirectionCheck(
   signals: { symbol: string; action: string; confidence: number; score: number; reason: string; regime?: string }[],
   tickerData: string,
   positionData: string,
+  backtestData: string = "",
 ): Promise<AiCheckResult> {
   const result: AiCheckResult = { signals: new Map(), positions: [] };
   if (signals.length === 0 && !positionData) return result;
@@ -48,6 +49,9 @@ ${positionData || "无"}
 
 【策略信号】
 ${signalLines}
+
+【实时回测评估】
+${backtestData || "无回测数据"}
 
 你的任务（输出 JSON）：
 1. 对每个策略信号，给出 score 0-100 表示支持度：

@@ -3,13 +3,15 @@ import { type MarketData, type Position, type AccountInfo } from "./exchanges";
 import { calcIndicators, calcMarketQuality, checkExtremeDeviation } from "./indicators";
 import { setAtrCache, setRsiCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor } from "./state";
 import { logger } from "./logger";
+import { runBacktest, generateBacktestSummary, isHighQualitySignal, type BacktestResult } from "./backtest";
+import { insertBacktestLog } from "./db";
 
 type S = "buy" | "sell" | "hold";
 
 interface TradeSignal { action: S; symbol: string; leverage: number; amountPercent: number; reason: string; confidence: number; score: number; stopLossPct: number; takeProfitPct: number; regime: string; }
 interface CoinSignal { symbol: string; regime: string; score: number; trend: string; strength: string; keyLevels: string; summary: string; analysis_1m: string; analysis_5m: string; analysis_15m: string; analysis_1h: string; analysis_1d: string; }
 interface PCmd { symbol: string; action: S | "close" | "close_partial"; closePercent?: number; reason: string; confidence: number; }
-export interface StrategyReport { analysis: CoinSignal[]; positions: PCmd[]; newTrades: TradeSignal[]; summary: string; execution?: { log: string[] }; }
+export interface StrategyReport { analysis: CoinSignal[]; positions: PCmd[]; newTrades: TradeSignal[]; summary: string; execution?: { log: string[] }; backtestSummaries?: string[]; }
 
 function ca(d: { open: number; high: number; low: number; close: number }[]): number[][] { return d.map(c => [0, 0, c.high, c.low, c.close, 0]); }
 function ch(d?: { open: number; high: number; low: number; close: number }[]): string { if (!d || d.length < 2) return ""; const p = ((d[d.length-1].close - d[0].close) / d[0].close * 100); return (p >= 0 ? "涨" : "跌") + Math.abs(p).toFixed(2) + "%"; }
@@ -41,7 +43,7 @@ export async function generateStrategyReport(
   positions: Position[],
   account: AccountInfo,
 ): Promise<StrategyReport | null> {
-  const a: CoinSignal[] = [], nt: TradeSignal[] = [];
+  const a: CoinSignal[] = [], nt: TradeSignal[] = [], btResults: BacktestResult[] = [];
   const es = new Set(positions.map(p => p.symbol));
   for (const sym of CONFIG.symbols) {
     const t = tickers.get(sym); if (!t) continue;
@@ -54,6 +56,23 @@ export async function generateStrategyReport(
     const at = i1.atr14 / p * 100;
     setAtrCache(sym, at / 100); // 存为小数（如 0.015 = 1.5%）
     setRsiCache(sym, i1.rsi14);
+
+    // ── 实时回测：多周期扫描，选最优 ──
+    const tfMap = { "5m": o?.["5m"], "15m": o?.["15m"], "30m": o?.["30m"], "1h": o?.["1h"] };
+    let bestBt: BacktestResult | null = null;
+    let bestTf = "5m";
+    for (const [tf, raw] of Object.entries(tfMap)) {
+      const arr = raw ? ca(raw) : [];
+      if (arr.length < 40) continue;
+      const bt = runBacktest(arr.map(x => x[4]), arr.map(x => x[2]), arr.map(x => x[3]));
+      if (!bestBt || Math.abs(bt.revAccuracy - bt.contAccuracy) > Math.abs(bestBt.revAccuracy - bestBt.contAccuracy)) {
+        bestBt = bt; bestTf = tf;
+      }
+    }
+    const bt = bestBt || runBacktest([], [], []);
+    logger.info(`[BT] ${sym}: 最优${bestTf}周期 ${bt.optimalStrategy} (rev${bt.revAccuracy.toFixed(0)}% vs cont${bt.contAccuracy.toFixed(0)}%, ADX~${bt.avgADX.toFixed(0)})`);
+    btResults.push(bt);
+    try { insertBacktestLog({ time: new Date().toISOString(), symbol: sym, optimalStrategy: bt.optimalStrategy, adxRegime: bt.adxRegime, revAccuracy: Math.round(bt.revAccuracy), contAccuracy: Math.round(bt.contAccuracy), confidence: bt.confidence, bestTf }); } catch {} // 非阻塞写库
     // ===== 日线方向过滤 + 动态回调入场 =====
     const dailyUp = id.ema20 > id.ema50;
     const dailyAdx = id.adx;
@@ -175,10 +194,18 @@ export async function generateStrategyReport(
     }
     // 超涨/超跌检查（在 a.push 前执行，确保 summary 正确显示）
     if (sig !== "hold") {
-      const extreme = checkExtremeDeviation(maDist, at, i1.rsi14, sig === "sell" ? "short" : "long", 3);
-      if (extreme.hit) {
-        sig = "hold"; sc = 0; cf = 0;
-        re = `${regime}/${extreme.label}风险(${extreme.detail})`;
+      // 回测判断为"延续"策略时，放宽超涨/超跌阈值，避免在强趋势中拦截顺势信号
+      const atrMult = bt.optimalStrategy === "continuation" ? 5 : 3;
+      const rsiLimit = bt.optimalStrategy === "continuation" ? 85 : 70;
+      if (bt.optimalStrategy === "continuation" && dailyAdx > 55) {
+        // ADX>55 极端趋势中 RSI 极端值无预测意义，不拦截，让趋势走完
+        logger.info(`[BT] ${sym}: ADX${dailyAdx.toFixed(0)}>55 极端趋势, 跳过超涨拦截`);
+      } else {
+        const extreme = checkExtremeDeviation(maDist, at, i1.rsi14, sig === "sell" ? "short" : "long", atrMult);
+        if (extreme.hit && (bt.optimalStrategy !== "continuation" || (sig === "buy" ? i1.rsi14 > rsiLimit : i1.rsi14 < 100 - rsiLimit))) {
+          sig = "hold"; sc = 0; cf = 0;
+          re = `${regime}/${extreme.label}风险(${extreme.detail})`;
+        }
       }
     }
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
@@ -217,6 +244,17 @@ export async function generateStrategyReport(
       else if (mq >= 40) { adjPct = Math.round(basePct * 0.6); adjLeverage = dynLeverage > 6 ? dynLeverage - 2 : dynLeverage; }  // 中等 → 60%
       else if (mq >= 20) { adjPct = Math.round(basePct * 0.4); adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 40%
       else { sig = "hold"; sc = 0; re = `低行情质量(mq${mq})，跳过`; }  // 很差 → 跳过
+      // 反转模式下，用高 K 线质量过滤器提升准确率（实体>0.5ATR+收盘极端）
+      if (sig !== "hold" && bt.optimalStrategy === "reversal") {
+        const lastCandle = o?.["1h"]?.[o["1h"].length - 1];
+        if (lastCandle) {
+          const hq = isHighQualitySignal(lastCandle.open, lastCandle.high, lastCandle.low, lastCandle.close, i1.atr14);
+          if (!hq) {
+            sig = "hold"; sc = 0; cf = 0;
+            re = `${regime}/反转模式+K线质量不足, 跳过`;
+          }
+        }
+      }
       if (sig !== "hold") {
         // AI 复盘反馈 — 动态调整评分/杠杆/置信度
         const adjScore = getAdjustedScore(sym, sc, re);
@@ -230,12 +268,21 @@ export async function generateStrategyReport(
           logger.info(`[ADJ] ${sym}: score ${sc}→${adjScore} | lev ${adjLeverage}→${adjLev} | cf ${cf}→${adjCf}`);
         }
         logger.info(`[MQ] ${sym}: mq=${mq} sig=${sig} pct=${adjPct} lev=${adjLev}`);
-        nt.push({ action: sig, symbol: sym, leverage: adjLev, amountPercent: adjPct, reason: re, confidence: adjCf, score: adjScore, stopLossPct: 3, takeProfitPct: 6, regime: rl, marketQuality: mq } as any);
+        // 动态止盈止损：基于 1h ATR + 回测置信度
+        const dynSlPct = Math.max(2, Math.min(8, at * 2));
+        const dynTpPct = Math.max(4, Math.min(15, at * 4));
+        nt.push({ action: sig, symbol: sym, leverage: adjLev, amountPercent: adjPct, reason: re, confidence: adjCf, score: adjScore, stopLossPct: dynSlPct, takeProfitPct: dynTpPct, regime: rl, marketQuality: mq } as any);
       }
       if (mq < 20) {
         logger.info(`[MQ] ${sym}: mq=${mq} < 20 信号被行情质量拦截`);
       }
     }
+  }
+
+  // 按币种建立回测结果索引
+  const btMap = new Map<string, BacktestResult>();
+  for (let i = 0; i < CONFIG.symbols.length; i++) {
+    if (btResults[i]) btMap.set(CONFIG.symbols[i], btResults[i]);
   }
 
   const pc: PCmd[] = [];
@@ -244,15 +291,29 @@ export async function generateStrategyReport(
     const o = ohlcv.get(pos.symbol); const c = o?.["1h"] ? ca(o["1h"]) : []; const i = calcIndicators(c);
     if (!i) { pc.push({ symbol: pos.symbol, action: "hold", reason: "数据不足", confidence: 0.5 }); continue; }
     let ac: "hold" | "close" = "hold", rr = "";
-    // 极端行情检测：RSI超卖/超涨 + ATR大幅偏离时主动平仓
     const at = i.atr14 / t.price * 100;
     const maDist = (t.price - i.ema20) / i.ema20 * 100;
-    const extreme = checkExtremeDeviation(maDist, at, i.rsi14, pos.side, 2.5);
+    const posBt = btMap.get(pos.symbol);
+
+    // 用回测结果调整极端行情检测：延续模式不轻易平仓
+    // ADX > 55 极端趋势中跳过平仓检测，让趋势跑完
+    const skipClose = posBt?.optimalStrategy === "continuation" && (i.adx > 55);
+    const atrMult = posBt?.optimalStrategy === "continuation" ? 4 : 2.5;
+    const extreme = skipClose ? { hit: false as const, label: "", detail: "" } : checkExtremeDeviation(maDist, at, i.rsi14, pos.side, atrMult);
     if (extreme.hit) {
       ac = "close";
       rr = `${extreme.label}风险(${extreme.detail})`;
     } else {
-      rr = "持有中";
+      const pnl = pos.unrealizedPnlPct || 0;
+      const reversalClose =
+        (pos.side === "long" && pnl > 3 && i.rsi14 > 75) ||
+        (pos.side === "short" && pnl > 3 && i.rsi14 < 25);
+      if (posBt?.optimalStrategy === "reversal" && reversalClose) {
+        ac = "close";
+        rr = `反转模式+RSI${i.rsi14.toFixed(0)}, 锁利(${pnl.toFixed(1)}%)`;
+      } else {
+        rr = "持有中";
+      }
     }
     pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
   }
@@ -263,13 +324,23 @@ export async function generateStrategyReport(
   const total = Math.max(totalBull + totalBear, 1);
   const marketBullish = totalBull / total >= 0.66;
   const marketBearish = totalBear / total >= 0.66;
+  const btSummaries = btResults.map((bt, i) => generateBacktestSummary(CONFIG.symbols[i] || "?", bt));
+
   for (const t of nt) {
     if (t.action === "hold") continue;
     const isReverse = (t.action === "buy" && marketBearish) || (t.action === "sell" && marketBullish);
     if (isReverse) {
-      t.confidence = Math.max(0.3, (t.confidence || 0) - 0.15);
-      t.score = Math.round((t.score || 0) * 0.7);
+      // 强市场偏向 + 回测确认 → 物理禁做逆势交易
+      const strongBias = (t.action === "sell" && marketBullish && totalBull >= total * 0.75)
+                       || (t.action === "buy" && marketBearish && totalBear >= total * 0.75);
+      if (strongBias) {
+        t.action = "hold";
+        logger.info(`[BT] ${t.symbol} 逆势信号被市场偏向+回测拦截 (${t.action} in ${marketBullish ? "bullish" : "bearish"}市场)`);
+      } else {
+        t.confidence = Math.max(0.3, (t.confidence || 0) - 0.15);
+        t.score = Math.round((t.score || 0) * 0.7);
+      }
     }
   }
-  return { analysis: a, positions: pc, newTrades: nt, summary: `【策略周期】${a.length}币种 ${pc.filter(x=>x.action!=="hold").length}持仓指令 ${nt.length}交易信号` };
+  return { analysis: a, positions: pc, newTrades: nt, summary: `【策略周期】${a.length}币种 ${pc.filter(x=>x.action!=="hold").length}持仓指令 ${nt.length}交易信号`, backtestSummaries: btSummaries };
 }

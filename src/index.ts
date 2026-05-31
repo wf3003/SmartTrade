@@ -349,11 +349,13 @@ async function monitorPositions() {
       const pricePnl = pnlPct / trailLev;          // 当前实际价格涨跌%
       const peakPrice = peakPnl / trailLev;         // 历史最高价格涨跌%
       if (peakPrice >= 0.8 && pos.qty > 0) {
+        const atrPct = (atrCache.get(pos.symbol) || 0.015) * 100;
+        const baseDist = Math.max(atrPct * 1.5, 0.8);
         let trailDist: number;
-        if (peakPrice >= 12)        trailDist = 3.0;  // 大肉：给3%回撤空间
-        else if (peakPrice >= 6)    trailDist = 2.0;  // 中等：给2%回撤
-        else if (peakPrice >= 3)    trailDist = 1.2;  // 小盈：1.2%回撤
-        else                        trailDist = 0.8;  // 刚激活：紧贴0.8%
+        if (peakPrice >= 12)        trailDist = Math.max(peakPrice * 0.25, baseDist);
+        else if (peakPrice >= 6)    trailDist = Math.max(baseDist * 1.5, baseDist);
+        else if (peakPrice >= 3)    trailDist = Math.max(baseDist * 1.2, baseDist);
+        else                        trailDist = baseDist;
         const floor = peakPrice - trailDist;
         if (pricePnl <= floor) {
           logger.warn(`🔄 跟踪止盈: ${pos.symbol} 价格峰值${peakPrice.toFixed(2)}%→${pricePnl.toFixed(2)}% 回撤${(peakPrice-pricePnl).toFixed(2)}%≥${trailDist}% 平仓${pos.qty}张`);
@@ -540,7 +542,7 @@ async function aiDecisionCycle() {
           return `${p.symbol} ${p.side} PnL:${(p.unrealizedPnlPct||0).toFixed(1)}% 杠杆${p.leverage}x | RSI${rsi.toFixed(0)} ATR${atr.toFixed(1)}% | 趋势:${analysis?.trend||"?"}(${analysis?.strength||"?"})${stratAdvice}`;
         }).join("\n")
       : "无";
-    aiResult = await aiDirectionCheck(report.newTrades, tickerIndicators, posLines);
+    aiResult = await aiDirectionCheck(report.newTrades, tickerIndicators, posLines, (report.backtestSummaries || []).join("\n"));
     if (aiResult) {
       if (aiResult.signals.size > 0) {
         const logStr = Array.from(aiResult.signals.entries()).map(([s, d]) => `${s}:评分${d.score}`).join(" | ");

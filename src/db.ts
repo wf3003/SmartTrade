@@ -86,6 +86,21 @@ try { db.exec("ALTER TABLE trades ADD COLUMN peak_pnl_pct REAL DEFAULT 0"); } ca
 try { db.exec("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_qty REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_pnl REAL DEFAULT 0"); } catch {}
+// 回测日志（每个决策周期，每个币种一条）
+db.exec(`
+  CREATE TABLE IF NOT EXISTS backtest_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    time TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    optimal_strategy TEXT NOT NULL,
+    adx_regime TEXT,
+    rev_accuracy REAL,
+    cont_accuracy REAL,
+    confidence INTEGER,
+    best_tf TEXT
+  )
+`);
+
 // AI 交易复盘记录
 db.exec(`
   CREATE TABLE IF NOT EXISTS ai_reviews (
@@ -284,6 +299,21 @@ export function insertAiReview(r: {
 
 export function getRecentAiReviews(limit: number = 5) {
   return db.prepare("SELECT * FROM ai_reviews ORDER BY id DESC LIMIT ?").all(limit);
+}
+
+// ========== 回测日志持久化 ==========
+export function insertBacktestLog(r: {
+  time: string; symbol: string; optimalStrategy: string;
+  adxRegime: string; revAccuracy: number; contAccuracy: number; confidence: number; bestTf: string;
+}) {
+  return db.prepare(`
+    INSERT INTO backtest_logs (time, symbol, optimal_strategy, adx_regime, rev_accuracy, cont_accuracy, confidence, best_tf)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(r.time, r.symbol, r.optimalStrategy, r.adxRegime, r.revAccuracy, r.contAccuracy, r.confidence, r.bestTf);
+}
+
+export function getRecentBacktestLogs(symbol: string, limit: number = 30) {
+  return db.prepare("SELECT * FROM backtest_logs WHERE symbol = ? ORDER BY id DESC LIMIT ?").all(symbol, limit);
 }
 
 // ========== 复盘反馈参数持久化 ==========
