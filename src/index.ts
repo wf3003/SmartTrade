@@ -166,6 +166,22 @@ async function executePartialClose(
   partialCloseMap.delete(symbol);
   applyCloseCooldown(symbol, partialPnl);
   logger.info(`  📝 流水账: ${symbol} 减仓${qty}张 PnL=$${partialPnl.toFixed(2)} (parent=${dbTrade.id})`);
+
+  // 检查累计分批平仓量是否已达 100%，是则把原记录标记 closed
+  try {
+    const totalRow = db.prepare(
+      "SELECT COALESCE(SUM(entry_qty), 0) as total FROM trades WHERE parent_id=? AND close_type='partial_close'"
+    ).get(dbTrade.id) as any;
+    const totalClosed = (totalRow?.total || 0);
+    if (totalClosed >= dbTrade.entry_qty - 0.001) {
+      db.prepare("UPDATE trades SET status='closed', exit_time=?, close_type='partial_close_full' WHERE id=?")
+        .run(new Date().toISOString(), dbTrade.id);
+      logger.warn(`  🔒 ${symbol} 分批平仓累计已达100%, 原记录#${dbTrade.id}标记为closed`);
+    }
+  } catch (e: any) {
+    logger.error(`检查分批累计平仓量失败 ${symbol}: ${e.message}`);
+  }
+
   return { closeResult, newPct: 50, partialPnl };
 }
 
@@ -385,20 +401,16 @@ async function monitorPositions() {
         }
       }
 
-      // 盈利回吐减半仓：曾经到过高位（不含杠杆5%+），回撤到亏损，减半保本
-      // 放在跟踪止盈之后、时间止损之前，不抢全平逻辑的优先级
-      if (peakPrice >= 5 && pnlPct < 0 && pos.qty > 1 && !_halfClosed.has(pos.symbol)) {
-        _halfClosed.add(pos.symbol);
-        setTimeout(() => _halfClosed.delete(pos.symbol), 30000);
-        const half = Math.ceil(pos.qty / 2);
-        logger.warn(`⚠️ 盈利回吐: ${pos.symbol} 峰值${peakPrice.toFixed(1)}%→当前${pnlPct.toFixed(1)}%, 减半${half}张保本`);
+      // 盈利回吐全平：曾经到过高位（不含杠杆5%+），回撤到亏损，直接全平保本
+      if (peakPrice >= 5 && pnlPct < 0 && pos.qty > 0) {
+        logger.warn(`⚠️ 盈利回吐: ${pos.symbol} 峰值${peakPrice.toFixed(1)}%→当前${pnlPct.toFixed(1)}%, 全平${pos.qty}张保本`);
         try {
-          const dbTrade = getLatestOpenTrades().get(pos.symbol);
-          await executePartialClose(pos.symbol, pos.side, half, Math.round(half / pos.qty * 100), dbTrade);
-          logger.info(`  ✅ 减半成功: ${pos.symbol} 剩余${pos.qty - half}张`);
+          await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pnlPct, "profit_revert");
+          closedThisCycle.add(pos.symbol);
         } catch (e: any) {
-          logger.error(`盈利回吐减仓失败 ${pos.symbol}: ${e.message}`);
+          logger.error(`盈利回吐全平失败 ${pos.symbol}: ${e.message}`);
         }
+        continue;
       }
 
       // 时间止损：持仓 > 4 小时且从未盈利且当前亏损 ≥ -2% → 平仓释放保证金
@@ -571,7 +583,7 @@ async function aiDecisionCycle() {
       if (aiResult.positions.length > 0) {
         const posAct = aiResult.positions.filter(p => p.action !== "hold");
         for (const p of posAct) {
-          logger.warn(`🤖 AI 持仓建议: ${p.symbol} → ${p.action} ${p.closePercent ? p.closePercent+"%" : ""} — ${p.reason}`);
+          logger.warn(`🤖 AI 持仓建议: ${p.symbol} → ${p.action} — ${p.reason}`);
         }
         const holdCnt = aiResult.positions.filter(p => p.action === "hold").length;
         logger.info(`🤖 AI 持仓评估: ${aiResult.positions.length}个, ${posAct.length}个非hold, ${holdCnt}个hold`);
@@ -602,86 +614,76 @@ async function aiDecisionCycle() {
       }
     }
 
-    // 5. 处理持仓管理指令（来自 AI）
-    if (report.positions && report.positions.length > 0) {
-      for (const posCmd of report.positions) {
-        const pos = positions.find(p => p.symbol === posCmd.symbol);
-        // 记录决策（即使持仓已不存在也要写，防"待执行"漏掉）
-        const decId = insertDecision({
-          time: new Date().toISOString(),
-          ai_model: CONFIG.ai.model, signal: `pos-${posCmd.action}`,
-          symbol: posCmd.symbol, action: posCmd.action, leverage: pos?.leverage || CONFIG.defaultLeverage,
-          amount: posCmd.closePercent || 100, reason: posCmd.reason,
-          confidence: posCmd.confidence || 0.7, raw_response: JSON.stringify(posCmd),
+    // 5. 合并策略引擎 + AI 持仓管理指令，去重执行
+    //    来源1: report.positions（策略引擎基于技术指标）
+    //    来源2: aiResult.positions（AI 大模型直接输出，优先级更高）
+    const mergedCommands = new Map<string, {
+      action: "close";
+      reason: string;
+      confidence: number;
+    }>();
+
+    if (report.positions) {
+      for (const pc of report.positions) {
+        if (pc.action === "hold" || pc.action === "buy" || pc.action === "sell") continue;
+        mergedCommands.set(pc.symbol, {
+          action: "close",
+          reason: pc.reason,
+          confidence: pc.confidence || 0.7,
         });
-
-        if (!pos) {
-          logger.info(`📋 AI 持仓决策: ${posCmd.symbol} → 持仓已不在 (${posCmd.reason})`);
-          updateDecisionStatus(decId, "success");
-          continue;
-        }
-
-        logger.info(`📋 AI 持仓决策: ${posCmd.symbol} → ${posCmd.action} (${posCmd.reason})`);
-
-        // 查找 DB 中的持仓记录，关闭后同步交易记录
-        const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === posCmd.symbol);
-
-        if (posCmd.action === "close") {
-          try {
-            await executeFullClose(posCmd.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
-            updateDecisionStatus(decId, "success");
-            logger.warn(`  ✅ AI 平仓: ${posCmd.symbol}`);
-
-          } catch (e: any) {
-            updateDecisionStatus(decId, "failed");
-            logger.error(`  平仓失败: ${e.message}`);
-          }
-        } else if (posCmd.action === "close_partial") {
-          const clsPct = posCmd.closePercent || 50;
-          const qty = Math.ceil(pos.qty * clsPct / 100);
-          try {
-            const { newPct, partialPnl } = await executePartialClose(posCmd.symbol, pos.side, qty, clsPct, dbTrade);
-            updateDecisionStatus(decId, "success");
-            logger.warn(`  ✅ AI 部分平仓: ${posCmd.symbol} ${qty}张 利润$${partialPnl.toFixed(2)} (累计${newPct}%)`);
-          } catch (e: any) {
-            updateDecisionStatus(decId, "failed");
-            logger.error(`  部分平仓失败: ${e.message}`);
-          }
-        }
+      }
+    }
+    // AI 指令覆盖策略指令（AI 优先级更高）
+    if (aiResult?.positions) {
+      for (const ap of aiResult.positions) {
+        if (ap.action === "hold") continue;
+        mergedCommands.set(ap.symbol, {
+          action: "close",
+          reason: ap.reason,
+          confidence: 0.7,
+        });
       }
     }
 
-    // 5b. AI 主动平仓（智能执行）
-    //   条件：持仓 > 30分钟（防开仓瞬间被AI关）；AI建议平仓不需要检查PnL
-    //   AI认为该平仓时（如RSI超卖趋势衰竭），即使亏损也应执行
-    if (aiResult?.positions) {
-      for (const aiPos of aiResult.positions) {
-        if (aiPos.action === "hold") continue;
-        const pos = positions.find(p => p.symbol === aiPos.symbol);
-        if (!pos) continue;
-        const posAge = newPositionTime.has(pos.symbol)
-          ? (Date.now() - (newPositionTime.get(pos.symbol) || 0)) / 60000
-          : 999;
-        const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === pos.symbol);
-        // 保护条件：仅持仓 < 30分钟时只预警不平仓（防开仓瞬间被AI关）
-        if (posAge < 30) {
-          logger.warn(`🤖 AI 预警: ${aiPos.symbol} → ${aiPos.action} ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${aiPos.reason} (太新，仅提示)`);
-          continue;
-        }
-        // 执行平仓
-        try {
-          if (aiPos.action === "close") {
-            await executeFullClose(aiPos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
-            logger.warn(`🤖 AI 平仓: ${aiPos.symbol} ${pos.qty}张 — ${aiPos.reason}`);
-          } else {
-            const qty = Math.ceil(pos.qty * (aiPos.closePercent || 50) / 100);
-            await executePartialClose(aiPos.symbol, pos.side, qty, aiPos.closePercent || 50, dbTrade);
-            logger.warn(`🤖 AI 平仓: ${aiPos.symbol} ${qty}张 — ${aiPos.reason}`);
-          }
+    // 统一执行合并后的指令（30分钟保护统一适用）
+    for (const [symbol, cmd] of mergedCommands) {
+      const pos = positions.find(p => p.symbol === symbol);
+      // 记录决策（即使持仓已不存在也要写，防"待执行"漏掉）
+      const decId = insertDecision({
+        time: new Date().toISOString(),
+        ai_model: CONFIG.ai.model, signal: "pos-close",
+        symbol, action: "close", leverage: pos?.leverage || CONFIG.defaultLeverage,
+        amount: 100, reason: cmd.reason,
+        confidence: cmd.confidence, raw_response: JSON.stringify(cmd),
+      });
 
-        } catch (e: any) {
-          logger.error(`AI平仓失败 ${aiPos.symbol}: ${e.message}`);
-        }
+      if (!pos) {
+        logger.info(`📋 AI 持仓决策: ${symbol} → 持仓已不在 (${cmd.reason})`);
+        updateDecisionStatus(decId, "success");
+        continue;
+      }
+
+      // 30分钟保护：持仓太新只预警不平仓（防开仓瞬间被AI关）
+      const posAge = newPositionTime.has(symbol)
+        ? (Date.now() - (newPositionTime.get(symbol) || 0)) / 60000
+        : 999;
+      if (posAge < 30) {
+        logger.warn(`🤖 AI 预警: ${symbol} → close ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${cmd.reason} (太新，仅提示)`);
+        updateDecisionStatus(decId, "success");
+        continue;
+      }
+
+      // 查找 DB 中的持仓记录
+      const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === symbol);
+      logger.info(`📋 AI 持仓决策: ${symbol} → close (${cmd.reason})`);
+
+      try {
+        await executeFullClose(symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
+        updateDecisionStatus(decId, "success");
+        logger.warn(`  ✅ AI 平仓: ${symbol}`);
+      } catch (e: any) {
+        updateDecisionStatus(decId, "failed");
+        logger.error(`  平仓失败: ${e.message}`);
       }
     }
 

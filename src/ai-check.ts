@@ -12,8 +12,7 @@ export interface AiOpinion {
 
 export interface AiPositionSuggestion {
   symbol: string;
-  action: "hold" | "close" | "close_partial";
-  closePercent?: number;
+  action: "hold" | "close";
   reason: string;
 }
 
@@ -59,10 +58,10 @@ ${backtestData || "无回测数据"}
    - 30-50: 认同但谨慎，建议轻仓
    - 50-70: 认同，建议半仓
    - 70-100: 强烈认同，正常开仓
-2. 对每个持仓，评估是否需要平仓/减仓：
+2. 对每个持仓，评估是否需要平仓：
    原则：
    - 亏损≠平仓理由（只要趋势完好就应该hold）
-   - 盈利收窄（峰值回吐超一半且当前仅微盈）→ close_partial 锁利
+    - 盈利收窄（峰值回吐超一半且当前仅微盈）→ close 锁利
    - 趋势确已转坏才close，需要**两个以上指标同时确认**：
      · ADX快速回落20+点
      · MACD背离严重（日线级别顶/底背离）
@@ -111,8 +110,7 @@ reason字段格式: (回测:延续/反转 cfXX%) 核心判断, 费率XX%, 量状
     if (parsed.positions) {
       result.positions = parsed.positions.map((p: any) => ({
         symbol: p.symbol,
-        action: p.action || "hold",
-        closePercent: p.closePercent,
+        action: p.action === "close" ? "close" : "hold",
         reason: p.reason || "",
       }));
     }

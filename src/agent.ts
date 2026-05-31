@@ -24,8 +24,7 @@ export interface CoinAnalysis {
 
 export interface PositionCommand {
   symbol: string;
-  action: "hold" | "close" | "close_partial";
-  closePercent?: number;
+  action: "hold" | "close";
   reason: string;
   confidence: number;
 }
@@ -170,10 +169,10 @@ ${decLines ? "\n" + decLines : ""}
 ## 你的任务（不是描述行情，而是做交易决策）
 1. 对各币种给出评分 -10~+10 和操作建议
 2. **持仓管理是第一优先级**：
-   - 盈利收窄（峰值回吐超过一半）→ close 或 close_partial 锁定利润
+   - 盈利收窄（峰值回吐超过一半）→ close 锁定利润
    - 持仓亏损且无反转信号 → close 止损离场，不要一直 hold
    - 趋势衰竭（ADX回落/RSI极端/量能萎缩）→ 主动平仓，不分方向
-   - 每轮至少给出 1-2 个平仓/减仓建议，不要全部 hold
+   - 每轮至少给出 1-2 个平仓建议，不要全部 hold
 3. 再找新机会：buy(做多)/sell(做空)/hold(不做)
 4. 需要你超越技术指标的地方：
    - 哪些信号是**真突破**，哪些是**假动作**？
@@ -190,7 +189,7 @@ ${decLines ? "\n" + decLines : ""}
   ],
   "positions": [
     {"symbol":"SUI/USDT","action":"hold","reason":"趋势完好但量能减弱，盯紧止损","confidence":0.7},
-    {"symbol":"DOGE/USDT","action":"close_partial","closePercent":50,"reason":"反弹测试阻力但空头未变，先减半仓降风险","confidence":0.65}
+    {"symbol":"DOGE/USDT","action":"close","reason":"反弹测试阻力但空头未变，降风险","confidence":0.65}
   ],
   "newTrades": [
     {"action":"sell","symbol":"SUI/USDT","leverage":5,"amountPercent":15,"reason":"空头共振，日线趋势强，追空","confidence":0.8}
@@ -224,8 +223,7 @@ function parseReport(raw: string): MarketReport | null {
       })),
       positions: toArray(obj.positions).map((p: any) => ({
         symbol: p.symbol || "",
-        action: ["hold","close","close_partial"].includes(p.action) ? p.action : "hold",
-        closePercent: p.closePercent ? Math.min(100, Math.max(1, p.closePercent)) : undefined,
+        action: p.action === "close" ? "close" : "hold",
         reason: p.reason || "",
         confidence: Number(p.confidence) || 0.7,
       })),

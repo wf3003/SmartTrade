@@ -10,7 +10,7 @@ type S = "buy" | "sell" | "hold";
 
 interface TradeSignal { action: S; symbol: string; leverage: number; amountPercent: number; reason: string; confidence: number; score: number; stopLossPct: number; takeProfitPct: number; regime: string; }
 interface CoinSignal { symbol: string; regime: string; score: number; trend: string; strength: string; keyLevels: string; summary: string; analysis_1m: string; analysis_5m: string; analysis_15m: string; analysis_1h: string; analysis_1d: string; }
-interface PCmd { symbol: string; action: S | "close" | "close_partial"; closePercent?: number; reason: string; confidence: number; }
+interface PCmd { symbol: string; action: S | "close"; reason: string; confidence: number; }
 export interface StrategyReport { analysis: CoinSignal[]; positions: PCmd[]; newTrades: TradeSignal[]; summary: string; execution?: { log: string[] }; backtestSummaries?: string[]; }
 
 function ch(d?: { open: number; high: number; low: number; close: number }[]): string { if (!d || d.length < 2) return ""; const p = ((d[d.length-1].close - d[0].close) / d[0].close * 100); return (p >= 0 ? "涨" : "跌") + Math.abs(p).toFixed(2) + "%"; }
@@ -305,7 +305,7 @@ export async function generateStrategyReport(
     const t = tickers.get(pos.symbol); if (!t) continue;
     const o = ohlcv.get(pos.symbol); const c = o?.["1h"] ? convertCandles(o["1h"]) : []; const i = calcIndicators(c);
     if (!i) { pc.push({ symbol: pos.symbol, action: "hold", reason: "数据不足", confidence: 0.5 }); continue; }
-    let ac: "hold" | "close" | "close_partial" = "hold", rr = "";
+    let ac: "hold" | "close" = "hold", rr = "";
     const at = i.atr14 / t.price * 100;
     const maDist = (t.price - i.ema20) / i.ema20 * 100;
     const posBt = btMap.get(pos.symbol);
@@ -317,8 +317,8 @@ export async function generateStrategyReport(
       (pos.side === "short" && c[c.length-1][4] > c[c.length-6][4] && pnl < -1)
     );
     if (flip) {
-      ac = "close_partial";
-      rr = `5根K线趋势转向, 减半(${pnl.toFixed(1)}%)`;
+      ac = "close";
+      rr = `5根K线趋势转向, 平仓(${pnl.toFixed(1)}%)`;
     } else
     if (posBt?.optimalStrategy === "reversal") {
       ac = "close";
@@ -344,8 +344,7 @@ export async function generateStrategyReport(
       }
     }
     }
-    const closePct = ac === ("close_partial" as string) ? 50 : undefined;
-    pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8, closePercent: closePct });
+    pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
   }
   // 市场偏向修正（BTC权重翻倍）：一方占比≥2/3才算主导，否则均衡不做修正
   const weight = (x: any) => x.symbol === "BTC/USDT" ? 2 : 1;
