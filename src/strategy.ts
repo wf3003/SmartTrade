@@ -201,6 +201,17 @@ export async function generateStrategyReport(
         } else {
           re = `${regime}/突破${entryMaName}观望`;
         }
+      } else if (es.has(sym)) {
+        // 加仓：已有持仓 + 延续模式 + 浮盈 + 回踩入场位
+        const pnl = positions.find(p=>p.symbol===sym)?.unrealizedPnlPct||0;
+        if (bt.optimalStrategy==="continuation" && pnl>0 && Math.abs(maDist)<=entryBand*0.6) {
+          sc = 5 + Math.round(at*3);
+          sig = regime.includes("多")?"buy":"sell";
+          re = `${regime}/浮盈${pnl.toFixed(1)}%加仓/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
+          cf = 0.55;
+        } else {
+          re = `${regime}/已有持仓持有中`;
+        }
       } else {
         re = `${regime}/已有持仓持有中`;
       }
