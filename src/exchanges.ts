@@ -352,9 +352,10 @@ class ExchangeManager {
     }
 
     // 最多重试 3 次，处理 demo 环境偶发 50001
-    let lastError: any;
+    let lastError: any, fallbackPosSide = false;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
+        if (fallbackPosSide && params.posSide) delete params.posSide;
         const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
         logger.info(`开仓成功: ${swapSymbol} ${side} ${qty}张 @${leverage}x`);
         const avgPrice = order?.price || order?.average || 0;
@@ -370,7 +371,13 @@ class ExchangeManager {
           if (body.code) code = String(body.code);
           if (body.data?.[0]?.sMsg) msg = body.data[0].sMsg;
         } catch {}
-        // 只有 50001（服务暂不可用）才重试，其他错误直接抛
+        // 50001服务暂不可用 → 重试; 51000posSide不支持 → 摘掉posSide重试
+        if (code === "51000" && params.posSide && attempt < 2) {
+          delete params.posSide;
+          logger.warn(`🔧 ${symbol} posSide不支持, 降级重试`);
+          lastError = { message: msg };
+          continue;
+        }
         if (code === "50001" && attempt < 3) {
           logger.warn(`⏳ 开仓重试 ${attempt}/3 ${symbol}: ${msg}`);
           await new Promise(r => setTimeout(r, 2000 * attempt));
@@ -437,6 +444,7 @@ class ExchangeManager {
     if (client.id === "okx" || client.id === "gate") {
       params.posSide = side;
     }
+    let pSide = side;
     try {
       const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
       const avgPrice = order?.price || order?.average || 0;
@@ -444,6 +452,12 @@ class ExchangeManager {
       return { order, avgPrice, fee };
     } catch (e: any) {
       const msg = e.message || String(e);
+      // 51000posSide不支持 → 摘掉重试
+      if (msg.includes("51000") && params.posSide) {
+        delete params.posSide;
+        const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
+        return { order, avgPrice: order?.price || order?.average || 0, fee: order?.fee?.cost || 0 };
+      }
       if (msg.includes("51169") || msg.includes("no position") || msg.includes("don't have any positions")) {
         logger.warn(`closePosition: ${symbol} 仓位已不存在（可能已被其他方式平仓）`);
         return { order: null, avgPrice: 0, fee: 0 };
