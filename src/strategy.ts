@@ -170,10 +170,14 @@ export async function generateStrategyReport(
           cf = isStrong ? 0.85 : 0.7;
         } else if (maDist > entryBand * 0.6) {
           const isStrong = regime.startsWith("强趋势");
-          const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
-          sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/追多(${maDist.toFixed(2)}%)`;
-          cf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
-          if (bt.optimalStrategy === "continuation" && bt.avgADX > 40) cf = Math.max(cf, 0.65);
+          if (maDist > 2 && dailyAdx < 60) {
+            re = `${regime}/偏离EMA${maDist.toFixed(2)}%等回调`;
+          } else {
+            const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
+            sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/追多(${maDist.toFixed(2)}%)`;
+            cf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
+            if (bt.optimalStrategy === "continuation" && bt.avgADX > 40) cf = Math.max(cf, 0.65);
+          }
         } else {
           re = `${regime}/跌破${entryMaName}观望`;
         }
@@ -186,10 +190,14 @@ export async function generateStrategyReport(
           cf = isStrong ? 0.85 : 0.7;
         } else if (maDist < -entryBand * 0.6) {
           const isStrong = regime.startsWith("强趋势");
-          const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
-          sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/追空(${maDist.toFixed(2)}%)`;
-          cf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
-          if (bt.optimalStrategy === "continuation" && bt.avgADX > 40) cf = Math.max(cf, 0.65);
+          if (Math.abs(maDist) > 2 && dailyAdx < 60) {
+            re = `${regime}/偏离EMA${Math.abs(maDist).toFixed(2)}%等反弹`;
+          } else {
+            const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
+            sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/追空(${maDist.toFixed(2)}%)`;
+            cf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
+            if (bt.optimalStrategy === "continuation" && bt.avgADX > 40) cf = Math.max(cf, 0.65);
+          }
         } else {
           re = `${regime}/突破${entryMaName}观望`;
         }
