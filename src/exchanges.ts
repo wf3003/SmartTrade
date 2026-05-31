@@ -347,9 +347,10 @@ class ExchangeManager {
       tdMode: "isolated",
       leverage,  // 兜底：部分 ccxt 版本支持直接传杠杆
     };
-    if (client.id === "okx" || client.id === "gate") {
-      params.posSide = side;
-    }
+    // OKX 单向持仓不传 posSide（双向持仓时取消下面注释）
+    // if (client.id === "okx" || client.id === "gate") {
+    //   params.posSide = side;
+    // }
 
     // 最多重试 3 次，处理 demo 环境偶发 50001
     let lastError: any, fallbackPosSide = false;
@@ -369,6 +370,7 @@ class ExchangeManager {
           const body = JSON.parse(e.message);
           if (body.msg) msg = body.msg;
           if (body.code) code = String(body.code);
+          if (body.data?.[0]?.sCode) code = String(body.data?.[0]?.sCode);
           if (body.data?.[0]?.sMsg) msg = body.data[0].sMsg;
         } catch {}
         // 50001服务暂不可用 → 重试; 51000posSide不支持 → 摘掉posSide重试
@@ -441,9 +443,10 @@ class ExchangeManager {
     const { client, swapSymbol } = found;
     const orderSide = side === "long" ? "sell" : "buy";
     const params: any = { reduceOnly: true, tdMode: "isolated" };
-    if (client.id === "okx" || client.id === "gate") {
-      params.posSide = side;
-    }
+    // OKX 单向持仓不传 posSide（双向持仓时取消下面注释）
+    // if (client.id === "okx" || client.id === "gate") {
+    //   params.posSide = side;
+    // }
     let pSide = side;
     try {
       const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);

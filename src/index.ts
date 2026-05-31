@@ -71,7 +71,7 @@ function getDynamicCooldown(symbol: string): number {
   return STOP_COOLDOWN_MINUTES;   // 15分钟
 }
 // 启动后等待 N 个周期再开新仓（让账户数据和 ATR 缓存稳定）
-const STARTUP_COOLDOWN_CYCLES = 1;
+const STARTUP_COOLDOWN_CYCLES = 0;
 // 每周期最多开 N 个新仓（按置信度排序后取头部）
 const MAX_NEW_PER_CYCLE = 10;
 // 本地已开仓集合（防 exchange.getPositions 延迟导致持仓上限失效）
