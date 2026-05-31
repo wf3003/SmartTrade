@@ -334,8 +334,8 @@ export async function generateStrategyReport(
     const isReverse = (t.action === "buy" && marketBearish) || (t.action === "sell" && marketBullish);
     if (isReverse) {
       // 强市场偏向 + 回测确认 → 物理禁做逆势交易
-      const strongBias = (t.action === "sell" && marketBullish && totalBull >= total * 0.75)
-                       || (t.action === "buy" && marketBearish && totalBear >= total * 0.75);
+      const strongBias = (t.action === "sell" && marketBullish && totalBull >= total * 0.66)
+                       || (t.action === "buy" && marketBearish && totalBear >= total * 0.66);
       if (strongBias) {
         t.action = "hold";
         logger.info(`[BT] ${t.symbol} 逆势信号被市场偏向+回测拦截 (${t.action} in ${marketBullish ? "bullish" : "bearish"}市场)`);
