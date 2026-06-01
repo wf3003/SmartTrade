@@ -51,9 +51,10 @@ const consecutiveStopCount = new Map<string, number>();
 const STOP_COOLDOWN_MINUTES = 30;
 // 连续止损计数按天衰减：超过24h未新止损则计数减1
 function decayStopCount(symbol: string): void {
-  const lastTs = stopCooldown.get(symbol);
-  if (!lastTs) return;
-  if (Date.now() - lastTs > 24 * 3600_000) {
+  const expiry = stopCooldown.get(symbol);
+  if (!expiry) return;
+  // 冷却已过期且超过24h → 计数减1
+  if (expiry < Date.now() && Date.now() - expiry > 24 * 3600_000) {
     const cur = consecutiveStopCount.get(symbol) || 0;
     if (cur > 0) consecutiveStopCount.set(symbol, Math.max(0, cur - 1));
     if ((consecutiveStopCount.get(symbol) || 0) === 0) {
@@ -431,7 +432,7 @@ async function monitorPositions() {
       }
 
       // 止损检查：新开仓用宽止损 -15%，正常 ATR 动态止损
-      if (stopCooldown.has(pos.symbol) && Date.now() - (stopCooldown.get(pos.symbol)||0) < 10000) continue; // 10秒冷却
+      if (stopCooldown.has(pos.symbol) && (stopCooldown.get(pos.symbol)||0) > Date.now()) continue; // 冷却中
       const atrVal = atrCache.get(pos.symbol) || 0.015;
       const stopLossCheck = isNewPosition
         ? (pnlPct <= -15 ? { shouldClose: true, level: "stop_loss", description: `新仓亏损${pnlPct.toFixed(1)}% 触发宽止损` } : null)
@@ -764,8 +765,8 @@ async function aiDecisionCycle() {
         if (stopCooldown.has(trade.symbol)) {
           logger.warn(`  🧊 冷却存在 ${trade.symbol}: expiry=${new Date(stopCooldown.get(trade.symbol)||0).toISOString()}, now=${Date.now()}, diff=${(Date.now() - (stopCooldown.get(trade.symbol)||0))/1000}s, dynMs=${dynMs/1000}s`);
         }
-        if (stopCooldown.has(trade.symbol) && Date.now() - (stopCooldown.get(trade.symbol)||0) < dynMs) {
-          const mins = Math.ceil((dynMs - (Date.now() - (stopCooldown.get(trade.symbol)||0))) / 60000);
+        if (stopCooldown.has(trade.symbol) && (stopCooldown.get(trade.symbol)||0) > Date.now()) {
+          const mins = Math.ceil(((stopCooldown.get(trade.symbol)||0) - Date.now()) / 60000);
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `止损冷却${mins}分钟` });
           logger.info(`⏸️ ${trade.symbol} 止损冷却中，${mins}分钟/${dynMin}总 (连续${consecutiveStopCount.get(trade.symbol) || 1}次)`);
           execLog.push(`cooldown:${trade.symbol}`);
