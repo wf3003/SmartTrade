@@ -311,10 +311,13 @@ export async function generateStrategyReport(
     const posBt = btMap.get(pos.symbol);
 
     // 短期动量：最后5根K线持续反向 + 浮亏 → 趋势可能转坏
+    // 强趋势(ADX>55)需要更深浮亏才触发，避免噪音平仓
     const pnl = pos.unrealizedPnlPct || 0;
-    const flip = c.length > 25 && (
-      (pos.side === "long" && c[c.length-1][4] < c[c.length-6][4] && pnl < -1) ||
-      (pos.side === "short" && c[c.length-1][4] > c[c.length-6][4] && pnl < -1)
+    const flipThreshold = i.adx > 55 ? -2.5 : -1.5;
+    const flipContinuation = posBt?.optimalStrategy === "continuation";
+    const flip = c.length > 25 && !flipContinuation && (
+      (pos.side === "long" && c[c.length-1][4] < c[c.length-6][4] && pnl < flipThreshold) ||
+      (pos.side === "short" && c[c.length-1][4] > c[c.length-6][4] && pnl < flipThreshold)
     );
     if (flip) {
       ac = "close";
