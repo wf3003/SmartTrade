@@ -109,17 +109,15 @@ async function executeFullClose(
   const closeResult = await exchangeManager.closePosition(symbol, side, qty);
   const dbTrade = getLatestOpenTrades().get(symbol);
   const exitPrice = closeResult.avgPrice || 0;  // fetchOrder 兜底后应有值
+  // 默认用持仓快照盈亏：pnl/pnlPct 是 pos.unrealizedPnl，交易所直接给的，最可靠
   let actualPnl = pnl, actualPnlPct = pnlPct;
-  if (closeResult.realizedPnl !== undefined && closeResult.realizedPnl !== null) {
-    // 交易所直接给的实际盈亏（含手续费），最准确
-    actualPnl = closeResult.realizedPnl;
-    if (dbTrade && dbTrade.margin > 0) actualPnlPct = (actualPnl / dbTrade.margin) * 100;
-  } else if (exitPrice > 0 && dbTrade) {
-    // 没有交易所盈亏，用成交价重算
-    actualPnl = side === "long" ? (exitPrice - dbTrade.entry_price) * qty : (dbTrade.entry_price - exitPrice) * qty;
-    actualPnlPct = side === "long"
-      ? (exitPrice - dbTrade.entry_price) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1)
-      : (dbTrade.entry_price - exitPrice) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1);
+  // 如果有交易所返回的实际盈亏（info.pnl），且值合理（不超保证金2倍），用交易所数据
+  if (closeResult.realizedPnl !== undefined && closeResult.realizedPnl !== null && dbTrade) {
+    const maxReasonable = Math.abs(dbTrade.margin || 0) * 2;
+    if (Math.abs(closeResult.realizedPnl) < maxReasonable) {
+      actualPnl = closeResult.realizedPnl;
+      if (dbTrade.margin > 0) actualPnlPct = (actualPnl / dbTrade.margin) * 100;
+    }
   }
   if (dbTrade) {
     closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, closeType);
