@@ -365,7 +365,10 @@ class ExchangeManager {
         let msg = e.message || String(e);
         let code = "";
         try {
-          const body = JSON.parse(e.message);
+          // ccxt error message 格式: "okx {"code":"1","data":[...]}"
+          // 去掉前缀再解析，否则 JSON.parse 失败
+          const raw = e.message?.includes(" ") ? e.message.substring(e.message.indexOf("{") || e.message.indexOf("[")) : e.message;
+          const body = JSON.parse(raw);
           if (body.msg) msg = body.msg;
           if (body.code) code = String(body.code);
           if (body.data?.[0]?.sCode) code = String(body.data?.[0]?.sCode);
