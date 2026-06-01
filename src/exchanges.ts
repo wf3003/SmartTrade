@@ -451,7 +451,14 @@ class ExchangeManager {
     // 双向持仓模式需要 posSide，先不带试一次
     try {
       const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
-      const avgPrice = order?.price || order?.average || 0;
+      let avgPrice = order?.price || order?.average || 0;
+      // OKX market order 返回可能不含 avgPx（订单刚创建），补 fetchOrder 拿实际成交价
+      if (!avgPrice && order?.id) {
+        try {
+          const filled = await (client as any).fetchOrder(order.id, swapSymbol);
+          avgPrice = filled?.average || filled?.price || avgPrice;
+        } catch {}
+      }
       const fee = order?.fee?.cost || 0;
       return { order, avgPrice, fee };
     } catch (e: any) {
@@ -461,14 +468,18 @@ class ExchangeManager {
         params.posSide = side;
         try {
           const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
-          return { order, avgPrice: order?.price || order?.average || 0, fee: order?.fee?.cost || 0 };
+          let avgPrice = order?.price || order?.average || 0;
+          if (!avgPrice && order?.id) { try { const f = await (client as any).fetchOrder(order.id, swapSymbol); avgPrice = f?.average || f?.price || avgPrice; } catch {} }
+          return { order, avgPrice, fee: order?.fee?.cost || 0 };
         } catch (e2: any) {
           const msg2 = e2.message || String(e2);
           // 加上 posSide 还是 51000 → 摘掉再试
           if (msg2.includes("51000") && params.posSide) {
             delete params.posSide;
             const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
-            return { order, avgPrice: order?.price || order?.average || 0, fee: order?.fee?.cost || 0 };
+            let avgPrice = order?.price || order?.average || 0;
+            if (!avgPrice && order?.id) { try { const f = await (client as any).fetchOrder(order.id, swapSymbol); avgPrice = f?.average || f?.price || avgPrice; } catch {} }
+            return { order, avgPrice, fee: order?.fee?.cost || 0 };
           }
           throw e2;
         }
@@ -477,7 +488,9 @@ class ExchangeManager {
       if (msg.includes("51000") && params.posSide) {
         delete params.posSide;
         const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
-        return { order, avgPrice: order?.price || order?.average || 0, fee: order?.fee?.cost || 0 };
+        let avgPrice = order?.price || order?.average || 0;
+        if (!avgPrice && order?.id) { try { const f = await (client as any).fetchOrder(order.id, swapSymbol); avgPrice = f?.average || f?.price || avgPrice; } catch {} }
+        return { order, avgPrice, fee: order?.fee?.cost || 0 };
       }
       if (msg.includes("51169") || msg.includes("no position") || msg.includes("don't have any positions")) {
         logger.warn(`closePosition: ${symbol} 仓位已不存在（可能已被其他方式平仓）`);
