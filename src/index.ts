@@ -137,7 +137,8 @@ async function executeFullClose(
     }
   } catch {}
 
-  logger.warn(`  [PNL] ${symbol} src=${pnlSource} pnl=$${actualPnl.toFixed(2)} pct=${actualPnlPct.toFixed(2)}%`);
+  const pnlClr = pnlSource === "exch" ? "\x1b[94m" : "\x1b[91m"; // 蓝=交易所 红=快照
+  logger.warn(`  ${pnlClr}🧾\x1b[0m ${symbol} src=${pnlSource} pnl=$${actualPnl.toFixed(2)} pct=${actualPnlPct.toFixed(2)}%`);
 
   if (dbTrade) {
     closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, `${closeType}[${pnlSource}]`);
