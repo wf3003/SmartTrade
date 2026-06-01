@@ -106,21 +106,41 @@ async function executeFullClose(
   pnlPct: number,
   closeType: string,
 ): Promise<{ closeResult: any }> {
+  // 平仓前重新拉一次持仓，拿到最新快照盈亏
+  let snapPnl = pnl, snapPnlPct = pnlPct;
+  try {
+    const positions = await exchangeManager.getPositions();
+    const pos = positions.find(p => p.symbol === symbol);
+    if (pos) { snapPnl = pos.unrealizedPnl || 0; snapPnlPct = pos.unrealizedPnlPct || 0; }
+  } catch {}
+
   const closeResult = await exchangeManager.closePosition(symbol, side, qty);
   const dbTrade = getLatestOpenTrades().get(symbol);
-  const exitPrice = closeResult.avgPrice || 0;  // fetchOrder 兜底后应有值
-  // 默认用持仓快照盈亏：pnl/pnlPct 是 pos.unrealizedPnl，交易所直接给的，最可靠
-  let actualPnl = pnl, actualPnlPct = pnlPct;
-  // 如果有交易所返回的实际盈亏（info.pnl），且值合理（不超保证金2倍），用交易所数据
-  if (closeResult.realizedPnl !== undefined && closeResult.realizedPnl !== null && dbTrade) {
-    const maxReasonable = Math.abs(dbTrade.margin || 0) * 2;
-    if (Math.abs(closeResult.realizedPnl) < maxReasonable) {
-      actualPnl = closeResult.realizedPnl;
-      if (dbTrade.margin > 0) actualPnlPct = (actualPnl / dbTrade.margin) * 100;
+  const exitPrice = closeResult.avgPrice || 0;
+
+  let actualPnl = snapPnl, actualPnlPct = snapPnlPct;
+  let pnlSource = "snap";
+
+  // 尝试从交易所收盘订单获取实际盈亏（生产环境 info.pnl 有值）
+  try {
+    if (closeResult.order?.id) {
+      const found = (exchangeManager as any).findSwapClient?.(symbol);
+      if (found) {
+        const closedOrders = await (found.client as any).fetchClosedOrders(found.swapSymbol, undefined, 10);
+        const myOrder = closedOrders.find((o: any) => o.id === closeResult.order.id);
+        if (myOrder && myOrder.info?.pnl && parseFloat(myOrder.info.pnl) !== 0) {
+          actualPnl = parseFloat(myOrder.info.pnl);
+          pnlSource = "exch";
+          if (dbTrade && dbTrade.margin > 0) actualPnlPct = (actualPnl / dbTrade.margin) * 100;
+        }
+      }
     }
-  }
+  } catch {}
+
+  logger.warn(`  🧾 ${symbol} pnlSource=${pnlSource} actualPnl=$${actualPnl.toFixed(2)} pnlPct=${actualPnlPct.toFixed(2)}%`);
+
   if (dbTrade) {
-    closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, closeType);
+    closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, `${closeType}[${pnlSource}]`);
   }
   // 状态清理
   peakPnlMap.delete(symbol);
