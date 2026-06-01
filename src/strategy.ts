@@ -104,7 +104,7 @@ export async function generateStrategyReport(
         // 震荡偏空——禁止做多，仅允许做空
         if (hasPos) {
           re = `震荡偏空/已有持仓持有中`;
-        } else if (maDist >= -entryBand * 0.6 && maDist <= entryBand) {
+        } else if (maDist >= 0 && maDist <= entryBand) {
           sc = -5 - Math.round(at * 3);
           sig = "sell";
           re = `震荡偏空/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
@@ -118,7 +118,7 @@ export async function generateStrategyReport(
         // 震荡偏多——禁止做空，仅允许做多
         if (hasPos) {
           re = `震荡偏多/已有持仓持有中`;
-        } else if (maDist >= -entryBand && maDist <= entryBand * 0.6) {
+        } else if (maDist >= -entryBand && maDist <= 0) {
           sc = 5 + Math.round(at * 3);
           sig = "buy";
           re = `震荡偏多/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
@@ -139,7 +139,7 @@ export async function generateStrategyReport(
         // 多空矛盾：日线多/1h空 或 日线空/1h多
         // 日线 ADX ≥ 60 置信度高 → 顺日线方向开仓
         if (dailyAdx >= 60 && isUp) {
-          if (maDist >= -entryBand && maDist <= entryBand * 0.6) {
+          if (maDist >= -entryBand && maDist <= 0) {
             sc = Math.round((8 + Math.round(at * 5)) * 1.0);
             sig = "buy";
             re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/顺日线做多/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
@@ -148,7 +148,7 @@ export async function generateStrategyReport(
             re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等回调`;
           }
         } else if (dailyAdx >= 60) {
-          if (maDist >= -entryBand * 0.6 && maDist <= entryBand) {
+          if (maDist >= 0 && maDist <= entryBand) {
             sc = Math.round((-8 - Math.round(at * 5)) * 1.0);
             sig = "sell";
             re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/顺日线做空/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
@@ -161,7 +161,8 @@ export async function generateStrategyReport(
           re = `${regime}/日线ADX${dailyAdx.toFixed(0)}<60/1h方向矛盾，等待信号一致`;
         }
       } else if (isUp && !hasPos) {
-        if (maDist >= -entryBand && maDist <= entryBand * 0.6) {
+        // 做多：回踩入场需要价格在EMA下方（真正回踩），EMA上方是追多
+        if (maDist >= -entryBand && maDist <= 0) {
           const isStrong = regime.startsWith("强趋势");
           sc = Math.round((8 + Math.round(at * 5)) * (isStrong ? 1.0 : 0.65));
           sig = "buy";
@@ -181,7 +182,8 @@ export async function generateStrategyReport(
           re = `${regime}/跌破${entryMaName}观望`;
         }
       } else if (!isUp && !hasPos) {
-        if (maDist >= -entryBand * 0.6 && maDist <= entryBand) {
+        // 做空：反弹入场需要价格在EMA上方（真正反弹），EMA下方是追空
+        if (maDist >= 0 && maDist <= entryBand) {
           const isStrong = regime.startsWith("强趋势");
           sc = Math.round((-8 - Math.round(at * 5)) * (isStrong ? 1.0 : 0.65));
           sig = "sell";
