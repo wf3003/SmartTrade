@@ -323,7 +323,8 @@ export async function generateStrategyReport(
       ac = "close";
       rr = `5根K线趋势转向, 平仓(${pnl.toFixed(1)}%)`;
     } else
-    if (posBt?.optimalStrategy === "reversal") {
+    if (posBt?.optimalStrategy === "reversal" && pnl < 3) {
+      // 反转模式只平亏损或微利仓位，已盈利≥3%的不平（交给跟踪止盈锁利）
       ac = "close";
       rr = `回测反转模式, 平仓(${pnl.toFixed(1)}%)`;
     } else {
