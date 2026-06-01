@@ -76,7 +76,9 @@ export async function generateStrategyReport(
     const dailyUp = id.ema20 > id.ema50;
     const dailyAdx = id.adx;
     // 日线ADX>50时强制跟随日线方向，1h回测的反转信号不适用
+    // 反转标志保留给持仓管理用——已有亏损仓位仍按反转平仓
     if (bt.optimalStrategy === "reversal" && dailyAdx > 50) {
+      bt.reversalSignal = true;  // 保留原始反转标志
       bt.optimalStrategy = "continuation";
       bt.confidence = Math.min(100, bt.confidence + 20);
       logger.info(`[BT] ${sym}: 日线ADX${dailyAdx.toFixed(0)}>50, 回测反转→延续`);
@@ -325,7 +327,7 @@ export async function generateStrategyReport(
       ac = "close";
       rr = `5根K线趋势转向, 平仓(${pnl.toFixed(1)}%)`;
     } else
-    if (posBt?.optimalStrategy === "reversal" && pnl < 3) {
+    if ((posBt?.optimalStrategy === "reversal" || posBt?.reversalSignal) && pnl < 3) {
       // 反转模式只平亏损或微利仓位，已盈利≥3%的不平（交给跟踪止盈锁利）
       ac = "close";
       rr = `回测反转模式, 平仓(${pnl.toFixed(1)}%)`;
