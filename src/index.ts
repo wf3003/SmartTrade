@@ -107,15 +107,20 @@ async function executeFullClose(
   closeType: string,
 ): Promise<{ closeResult: any }> {
   const closeResult = await exchangeManager.closePosition(symbol, side, qty);
-  // DB — 用实际成交价重算盈亏，避免传入 pnlPct 为 0/undefined 导致冷却漏掉
   const dbTrade = getLatestOpenTrades().get(symbol);
-  const exitPrice = closeResult.avgPrice || 0;
-  const actualPnl = exitPrice > 0 && dbTrade
-    ? (side === "long" ? (exitPrice - dbTrade.entry_price) : (dbTrade.entry_price - exitPrice)) * qty
-    : pnl;
-  const actualPnlPct = exitPrice > 0 && dbTrade
-    ? (side === "long" ? (exitPrice - dbTrade.entry_price) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1) : (dbTrade.entry_price - exitPrice) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1))
-    : pnlPct;
+  const exitPrice = closeResult.avgPrice || 0;  // fetchOrder 兜底后应有值
+  let actualPnl = pnl, actualPnlPct = pnlPct;
+  if (closeResult.realizedPnl !== undefined && closeResult.realizedPnl !== null) {
+    // 交易所直接给的实际盈亏（含手续费），最准确
+    actualPnl = closeResult.realizedPnl;
+    if (dbTrade && dbTrade.margin > 0) actualPnlPct = (actualPnl / dbTrade.margin) * 100;
+  } else if (exitPrice > 0 && dbTrade) {
+    // 没有交易所盈亏，用成交价重算
+    actualPnl = side === "long" ? (exitPrice - dbTrade.entry_price) * qty : (dbTrade.entry_price - exitPrice) * qty;
+    actualPnlPct = side === "long"
+      ? (exitPrice - dbTrade.entry_price) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1)
+      : (dbTrade.entry_price - exitPrice) / dbTrade.entry_price * 100 * (dbTrade.leverage || 1);
+  }
   if (dbTrade) {
     closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, closeType);
   }

@@ -462,8 +462,15 @@ class ExchangeManager {
           avgPrice = filled?.average || filled?.price || avgPrice;
         } catch {}
       }
+      // 从交易所获取实际盈亏（含手续费）
+      let realizedPnl: number | undefined;
+      try {
+        const closedOrders = await (client as any).fetchClosedOrders(swapSymbol, undefined, 5);
+        const myOrder = closedOrders.find((o: any) => o.id === order.id);
+        if (myOrder && myOrder.info?.pnl !== undefined) realizedPnl = parseFloat(myOrder.info.pnl);
+      } catch {}
       const fee = order?.fee?.cost || 0;
-      return { order, avgPrice, fee };
+      return { order, avgPrice, fee, realizedPnl };
     } catch (e: any) {
       const msg = e.message || String(e);
       // 51000: 双向持仓需要 posSide → 补上重试
