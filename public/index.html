@@ -392,7 +392,12 @@ async function refresh(){
         const pnlPct=isClosed?(t.pnl_pct||0):0;
         const pnlColor=pnl>=0?"green":"red";
         const showTime=isClosed&&t.exit_time?t.exit_time:t.entry_time;
-        return `<tr><td class="num" style="color:#8b949e">${i+1}</td><td class="num">${dt(showTime)}</td><td><b>${t.symbol}</b></td><td style="color:${dirColor}">${side}</td><td class="num">${t.leverage}x</td><td class="num">$${sa(t.entry_price,4)}</td><td class="num">${qtyDisplay}</td><td class="num">$${sa(val,2)}</td><td class="num">$${sa(mg,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</td></tr>`;
+        let pnlTag="";
+        if(isClosed && t.close_type){
+          const m=t.close_type.match(/\[(exch|snap)\]/);
+          if(m) pnlTag=m[1]==="exch"?"<span style=\"font-size:10px;color:#58a6ff;margin-left:2px\" title=\"交易所数据\">📡</span>":"<span style=\"font-size:10px;color:#8b949e;margin-left:2px\" title=\"快照数据\">📷</span>";
+        }
+        return `<tr><td class="num" style="color:#8b949e">${i+1}</td><td class="num">${dt(showTime)}</td><td><b>${t.symbol}</b></td><td style="color:${dirColor}">${side}</td><td class="num">${t.leverage}x</td><td class="num">$${sa(t.entry_price,4)}</td><td class="num">${qtyDisplay}</td><td class="num">$${sa(val,2)}</td><td class="num">$${sa(mg,2)}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}$${sa(pnl,2)}${pnlTag}</td><td class="num ${pnlColor}">${pnl>=0?"+":""}${sa(pnlPct,2)}%</td></tr>`;
       }).join("");
     }
 
