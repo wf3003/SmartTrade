@@ -334,12 +334,9 @@ class ExchangeManager {
         logger.warn(`⚠️ setLeverage 全失败: ${symbol} → ${leverage}x 未生效，使用交易所当前杠杆`);
       }
     }
-    // 设置持仓模式（OKX 逐仓 isolated）
-    if (typeof client.setPositionMode === "function") {
-      try { await client.setPositionMode(true, swapSymbol); } catch {}
-      if (typeof (client as any).setMarginMode === "function") {
-        try { await (client as any).setMarginMode("isolated", swapSymbol); } catch {}
-      }
+    // 设置逐仓模式 — 依赖已有的持仓模式，不自作主张切换
+    if (typeof (client as any).setMarginMode === "function") {
+      try { await (client as any).setMarginMode("isolated", swapSymbol); } catch {}
     }
 
     const orderSide = side === "long" ? "buy" : "sell";
@@ -374,10 +371,17 @@ class ExchangeManager {
           if (body.data?.[0]?.sCode) code = String(body.data?.[0]?.sCode);
           if (body.data?.[0]?.sMsg) msg = body.data[0].sMsg;
         } catch {}
-        // 50001服务暂不可用 → 重试; 51000posSide不支持 → 摘掉posSide重试
-        if (code === "51000" && params.posSide && attempt < 2) {
-          delete params.posSide;
-          logger.warn(`🔧 ${symbol} posSide不支持, 降级重试`);
+        // 50001服务暂不可用 → 重试; 51000 posSide 需要/不需要 → 双向自适应重试
+        if (code === "51000" && attempt < 3) {
+          if (params.posSide) {
+            // posSide 已传但不被接受（单向持仓模式不需要）→ 移除重试
+            delete params.posSide;
+            logger.warn(`🔧 ${symbol} posSide不支持(单向持仓), 降级重试`);
+          } else {
+            // posSide 未传但被要求（双向持仓模式需要）→ 补上重试
+            params.posSide = side;
+            logger.warn(`🔧 ${symbol} 需要posSide(双向持仓), 补上重试`);
+          }
           lastError = { message: msg };
           continue;
         }
