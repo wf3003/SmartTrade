@@ -137,7 +137,7 @@ async function executeFullClose(
     }
   } catch {}
 
-  logger.warn(`  🧾 ${symbol} pnlSource=${pnlSource} actualPnl=$${actualPnl.toFixed(2)} pnlPct=${actualPnlPct.toFixed(2)}%`);
+  logger.warn(`  [PNL] ${symbol} src=${pnlSource} pnl=$${actualPnl.toFixed(2)} pct=${actualPnlPct.toFixed(2)}%`);
 
   if (dbTrade) {
     closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, `${closeType}[${pnlSource}]`);
