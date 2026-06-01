@@ -122,6 +122,7 @@ async function executeFullClose(
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
+  logger.warn(`  🧊 ${symbol} actualPnlPct=${actualPnlPct.toFixed(2)}% → ${actualPnlPct < 1 ? '冷却' : '不冷却(盈利≥1%)'}`);
   applyCloseCooldown(symbol, actualPnlPct);
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
@@ -760,6 +761,9 @@ async function aiDecisionCycle() {
         // 止损冷却检查：递增惩罚
         const dynMin = getDynamicCooldown(trade.symbol);
         const dynMs = dynMin * 60000;
+        if (stopCooldown.has(trade.symbol)) {
+          logger.warn(`  🧊 冷却存在 ${trade.symbol}: expiry=${new Date(stopCooldown.get(trade.symbol)||0).toISOString()}, now=${Date.now()}, diff=${(Date.now() - (stopCooldown.get(trade.symbol)||0))/1000}s, dynMs=${dynMs/1000}s`);
+        }
         if (stopCooldown.has(trade.symbol) && Date.now() - (stopCooldown.get(trade.symbol)||0) < dynMs) {
           const mins = Math.ceil((dynMs - (Date.now() - (stopCooldown.get(trade.symbol)||0))) / 60000);
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `止损冷却${mins}分钟` });
