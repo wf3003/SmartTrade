@@ -287,6 +287,18 @@ async function executeFullOpen(
   }
 }
 
+// 导出方向暂停状态供网页仪表盘显示
+export function getDirectionPauseInfo() {
+  return {
+    longPaused,
+    shortPaused,
+    dualFrozen: dualFrozenUntil > Date.now(),
+    longRemainMin: longPauseUntil > 0 ? Math.max(0, Math.ceil((longPauseUntil - Date.now()) / 60000)) : 0,
+    shortRemainMin: shortPauseUntil > 0 ? Math.max(0, Math.ceil((shortPauseUntil - Date.now()) / 60000)) : 0,
+    dualRemainMin: dualFrozenUntil > 0 ? Math.max(0, Math.ceil((dualFrozenUntil - Date.now()) / 60000)) : 0,
+  };
+}
+
 // 全局未捕获异常处理（防止决策超时等导致进程崩溃）
 process.on("unhandledRejection", (reason) => {
   logger.error(`💥 未捕获的 Promise 异常: ${reason instanceof Error ? reason.message : String(reason)}`);
@@ -597,6 +609,22 @@ async function monitorPositions() {
       setCacheData(account, positions);
       lastSnapshotTime = now;
     }
+  // 【优化】方向暂停超时检查（监控循环每2秒，恢复更快）
+  if (longPaused && longPauseUntil > 0 && Date.now() >= longPauseUntil) {
+    longPaused = false; longPauseUntil = 0; longPnlBuf.length = 0;
+    logger.info(`🔓 做多暂停到期(监控循环),恢复做多`);
+  }
+  if (shortPaused && shortPauseUntil > 0 && Date.now() >= shortPauseUntil) {
+    shortPaused = false; shortPauseUntil = 0; shortPnlBuf.length = 0;
+    logger.info(`🔓 做空暂停到期(监控循环),恢复做空`);
+  }
+  if (dualFrozenUntil > 0 && Date.now() >= dualFrozenUntil) {
+    longPaused = false; shortPaused = false;
+    longPnlBuf.length = 0; shortPnlBuf.length = 0;
+    longPauseUntil = 0; shortPauseUntil = 0;
+    dualFrozenUntil = 0;
+    logger.info(`🔓 双向冻结到期(监控循环),方向计数重置`);
+  }
   } catch (e: any) {
     logger.error(`监控异常: ${e.message}`);
   }
