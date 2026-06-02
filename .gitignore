@@ -6,4 +6,5 @@ data/
 dist/
 .deepseek/
 sessions/
+public/test*.html
 check_db.*
