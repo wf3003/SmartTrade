@@ -49,6 +49,12 @@ const stopCooldown = new Map<string, number>();
 const consecutiveStopCount = new Map<string, number>();
 // 止损后暂停该币种交易的最小分钟数
 const STOP_COOLDOWN_MINUTES = 30;
+// 方向暂停：最近3笔做多/做空盈亏滚动窗口（方向连续性自检）
+const longPnlBuf: number[] = [];
+const shortPnlBuf: number[] = [];
+let longPaused = false;
+let shortPaused = false;
+let dualFrozenUntil = 0;
 // 连续止损计数按天衰减：超过24h未新止损则计数减1
 function decayStopCount(symbol: string): void {
   const expiry = stopCooldown.get(symbol);
@@ -153,6 +159,28 @@ async function executeFullClose(
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
   setTimeout(() => _recentlyClosed.delete(symbol), 30000);
+  // 【优化】方向暂停：更新滚动窗口
+  if (side === "long" || side === "short") {
+    const dirBuf = side === "long" ? longPnlBuf : shortPnlBuf;
+    dirBuf.push(actualPnlPct > 0 ? 1 : 0);
+    if (dirBuf.length > 3) dirBuf.shift();
+    if (actualPnlPct > 0) {
+      if (side === "long") longPaused = false; else shortPaused = false;
+    } else if (dirBuf.length >= 2 && dirBuf.filter(v => v === 0).length >= 2) {
+      if (side === "long") longPaused = true; else shortPaused = true;
+    }
+    // 双向冻结
+    if (longPaused && shortPaused && dualFrozenUntil === 0) {
+      dualFrozenUntil = Date.now() + 30 * 60 * 1000;
+      logger.warn(`🔒 双向方向暂停, 冻结30分钟`);
+    }
+    if (dualFrozenUntil > 0 && Date.now() >= dualFrozenUntil) {
+      longPaused = false; shortPaused = false;
+      longPnlBuf.length = 0; shortPnlBuf.length = 0;
+      dualFrozenUntil = 0;
+      logger.info(`🔓 冻结到期, 方向计数重置`);
+    }
+  }
   return { closeResult, actualPnl, actualPnlPct };
 }
 
@@ -472,6 +500,21 @@ async function monitorPositions() {
         continue;
       }
 
+      // 【优化】120分钟从未盈利且浮亏 → 平仓释放
+      const posAgeMin = newPositionTime.has(pos.symbol)
+        ? (Date.now() - (newPositionTime.get(pos.symbol) || 0)) / 60000
+        : 0;
+      if (posAgeMin > 120 && pnlPct < 0 && peakPnl < 0.5 && pos.qty > 0) {
+        logger.warn(`⏰ 无盈利平仓: ${pos.symbol} ${posAgeMin.toFixed(0)}分从未过半盈, 平仓`);
+        try {
+          await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "no_profit_stop");
+          closedThisCycle.add(pos.symbol);
+        } catch (e: any) {
+          logger.error(`无盈利平仓失败 ${pos.symbol}: ${e.message}`);
+        }
+        continue;
+      }
+
       // 止损检查：新开仓用宽止损 -15%，正常 ATR 动态止损
       if (stopCooldown.has(pos.symbol) && (stopCooldown.get(pos.symbol)||0) > Date.now()) continue; // 冷却中
       const atrVal = atrCache.get(pos.symbol) || 0.015;
@@ -786,6 +829,20 @@ async function aiDecisionCycle() {
         if (trade.action === "hold") continue;
         const regime = (trade as any).regime || "";
         const regimeThreshold = regime.startsWith("强趋势") ? 0.35 : regime.startsWith("弱趋势") ? 0.40 : regime.includes("震荡") ? 0.55 : 0.80;
+        // 【优化】方向暂停检查
+        const tradeDir = trade.action === "buy" ? "long" : "short";
+        if (dualFrozenUntil > Date.now()) {
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "双向冻结30分中" });
+          logger.info(`⏸️ ${trade.symbol} 双向冻结30分中,跳过`);
+          execLog.push(`frozen:${trade.symbol}`);
+          continue;
+        }
+        if ((tradeDir === "long" && longPaused) || (tradeDir === "short" && shortPaused)) {
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `方向暂停${tradeDir}` });
+          logger.info(`⏸️ ${trade.symbol} 方向暂停${tradeDir},跳过`);
+          execLog.push(`dirPause:${trade.symbol}`);
+          continue;
+        }
         if ((trade.confidence || 0) < regimeThreshold) { 
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `信心度不足(${((trade.confidence||0)*100).toFixed(0)}%<${(regimeThreshold*100).toFixed(0)}%)` });
           const msg = `⏭️ ${trade.symbol} 信心度${((trade.confidence||0)*100).toFixed(0)}% < ${(regimeThreshold*100).toFixed(0)}%(${regime||"-"}) 跳过`;

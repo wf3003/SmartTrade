@@ -284,6 +284,11 @@ export async function generateStrategyReport(
           }
         }
       }
+      // 【优化】低杠杆+低质量行情不交易
+      if (sig !== "hold" && mq < 40 && adjLeverage <= 4) {
+        sig = "hold"; sc = 0;
+        re = `低质低杠杆(lev${adjLeverage} mq${mq}),跳过`;
+      }
       if (sig !== "hold") {
         // AI 复盘反馈 — 动态调整评分/杠杆/置信度
         const adjScore = getAdjustedScore(sym, sc, re);
