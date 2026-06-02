@@ -305,7 +305,21 @@ export async function generateStrategyReport(
         // 动态止盈止损：基于 1h ATR + 回测置信度
         const dynSlPct = Math.max(2, Math.min(8, at * 2));
         const dynTpPct = Math.max(4, Math.min(15, at * 4));
-        nt.push({ action: sig, symbol: sym, leverage: adjLev, amountPercent: adjPct, reason: re, confidence: adjCf, score: adjScore, stopLossPct: dynSlPct, takeProfitPct: dynTpPct, regime: rl, marketQuality: mq } as any);
+        // 【优化】日线EMA20方向检查：价格在线下做多或线上做空→逆势降权
+        let finalCf = adjCf, finalScore = adjScore, finalRe = re;
+        if (id && id.ema20 > 0) {
+          const emaDist = ((p - id.ema20) / id.ema20 * 100).toFixed(1);
+          if (sig === "buy" && p < id.ema20) {
+            finalCf = Math.max(0.15, adjCf * 0.3);
+            finalScore = Math.round(adjScore * 0.3);
+            finalRe = `${re}[逆日线EMA,价下${emaDist}%]`;
+          } else if (sig === "sell" && p > id.ema20) {
+            finalCf = Math.max(0.15, adjCf * 0.3);
+            finalScore = Math.round(adjScore * 0.3);
+            finalRe = `${re}[逆日线EMA,价上${emaDist}%]`;
+          }
+        }
+        nt.push({ action: sig, symbol: sym, leverage: adjLev, amountPercent: adjPct, reason: finalRe, confidence: finalCf, score: finalScore, stopLossPct: dynSlPct, takeProfitPct: dynTpPct, regime: rl, marketQuality: mq } as any);
       }
       if (mq < 20) {
         logger.info(`[MQ] ${sym}: mq=${mq} < 20 信号被行情质量拦截`);
@@ -390,8 +404,8 @@ export async function generateStrategyReport(
   const totalBull = a.filter(x => x.trend === "bullish").reduce((s, x) => s + weight(x), 0);
   const totalBear = a.filter(x => x.trend === "bearish").reduce((s, x) => s + weight(x), 0);
   const total = Math.max(totalBull + totalBear, 1);
-  const marketBullish = totalBull / total >= 0.66;
-  const marketBearish = totalBear / total >= 0.66;
+  const marketBullish = totalBull / total >= 0.60;
+  const marketBearish = totalBear / total >= 0.60;
   const btSummaries = btResults.map((bt, i) => generateBacktestSummary(CONFIG.symbols[i] || "?", bt));
 
   for (const t of nt) {

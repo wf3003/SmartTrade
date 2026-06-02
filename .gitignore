@@ -9,3 +9,4 @@ sessions/
 public/test*.html
 check_db.*
 _*.mjs
+_*.ts
