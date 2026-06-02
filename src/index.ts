@@ -474,32 +474,11 @@ async function monitorPositions() {
         }
       }
 
-      // 跟踪止盈：峰值越高回撤容忍度越大 — 四档阶梯（防峰值15%被1%回撤吞掉）
-      const trailLev = Math.max(pos.leverage || 1, 1);
-      const pricePnl = pnlPct / trailLev;          // 当前实际价格涨跌%
-      const peakPrice = peakPnl / trailLev;         // 历史最高价格涨跌%
-      if (peakPrice >= 0.8 && pos.qty > 0) {
-        const atrPct = (atrCache.get(pos.symbol) || 0.015) * 100;
-        const baseDist = Math.max(atrPct * 1.5, 0.8);
-        let trailDist: number;
-        if (peakPrice >= 12)        trailDist = Math.max(peakPrice * 0.25, baseDist);
-        else if (peakPrice >= 6)    trailDist = Math.max(baseDist * 1.5, baseDist);
-        else if (peakPrice >= 3)    trailDist = Math.max(baseDist * 1.2, baseDist);
-        else                        trailDist = baseDist;
-        const floor = peakPrice - trailDist;
-        if (pricePnl <= floor) {
-          logger.warn(`🔄 跟踪止盈: ${pos.symbol} 价格峰值${peakPrice.toFixed(2)}%→${pricePnl.toFixed(2)}% 回撤${(peakPrice-pricePnl).toFixed(2)}%≥${trailDist}% 平仓${pos.qty}张`);
-          try {
-            await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pnlPct, "trail_stop");
-            closedThisCycle.add(pos.symbol);
-          } catch (e: any) {
-            logger.error(`跟踪止盈失败 ${pos.symbol}: ${e.message}`);
-          }
-          continue;
-        }
-      }
+      // 跟踪止盈已由浮盈保护替代，不再需要
 
       // 盈利回吐全平：曾经到过高位（不含杠杆5%+），回撤到亏损，直接全平保本
+      const trailLev = Math.max(pos.leverage || 1, 1);
+      const peakPrice = peakPnl / trailLev;
       if (peakPrice >= 5 && pnlPct < 0 && pos.qty > 0) {
         logger.warn(`⚠️ 盈利回吐: ${pos.symbol} 峰值${peakPrice.toFixed(1)}%→当前${pnlPct.toFixed(1)}%, 全平${pos.qty}张保本`);
         try {

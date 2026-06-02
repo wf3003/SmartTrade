@@ -385,16 +385,8 @@ export async function generateStrategyReport(
       ac = "close";
       rr = `${extreme.label}风险(${extreme.detail})`;
     } else {
-      const pnl = pos.unrealizedPnlPct || 0;
-      const reversalClose =
-        (pos.side === "long" && pnl > 3 && i.rsi14 > 75) ||
-        (pos.side === "short" && pnl > 3 && i.rsi14 < 25);
-      if (reversalClose) {
-        ac = "close";
-        rr = `RSI${i.rsi14.toFixed(0)}, 锁利(${pnl.toFixed(1)}%)`;
-      } else {
-        rr = "持有中";
-      }
+      // RSI锁利已由浮盈保护替代，不再需要
+      rr = "持有中";
     }
     }
     pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });

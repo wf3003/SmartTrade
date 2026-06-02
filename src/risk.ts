@@ -91,12 +91,16 @@ export function checkProfitProtect(
   currentPnlPct: number,
 ): { shouldClose: boolean; reason: string } | null {
   if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
-  // 保护线 = 峰值的50%，最低保留1.5%
-  const protectLine = Math.max(peakPnlPct * 0.5, 1.5);
-  if (currentPnlPct < protectLine) {
+  // 四档阶梯保护：峰值越高容忍回撤越小
+  const protectLine = peakPnlPct >= 20 ? peakPnlPct * 0.90
+                     : peakPnlPct >= 12 ? peakPnlPct * 0.80
+                     : peakPnlPct >= 6  ? peakPnlPct * 0.70
+                     : peakPnlPct * 0.50;
+  const line = Math.max(protectLine, 1.5);
+  if (currentPnlPct < line) {
     return {
       shouldClose: true,
-      reason: `浮盈保护: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${protectLine.toFixed(1)}%`,
+      reason: `浮盈保护: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${line.toFixed(1)}%`,
     };
   }
   return null;
