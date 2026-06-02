@@ -172,7 +172,8 @@ async function executeFullClose(
     // 双向冻结
     if (longPaused && shortPaused && dualFrozenUntil === 0) {
       dualFrozenUntil = Date.now() + 30 * 60 * 1000;
-      logger.warn(`🔒 双向方向暂停, 冻结30分钟`);
+      const freezeMins = Math.ceil((dualFrozenUntil - Date.now()) / 60000);
+      logger.warn(`🔒 双向方向暂停, 冻结${freezeMins}分钟, 解冻:${new Date(dualFrozenUntil).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai'})}`);
     }
     if (dualFrozenUntil > 0 && Date.now() >= dualFrozenUntil) {
       longPaused = false; shortPaused = false;
@@ -832,8 +833,9 @@ async function aiDecisionCycle() {
         // 【优化】方向暂停检查
         const tradeDir = trade.action === "buy" ? "long" : "short";
         if (dualFrozenUntil > Date.now()) {
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "双向冻结30分中" });
-          logger.info(`⏸️ ${trade.symbol} 双向冻结30分中,跳过`);
+          const remain = Math.ceil((dualFrozenUntil - Date.now()) / 60000);
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `双向冻结,剩${remain}分钟` });
+          logger.info(`⏸️ ${trade.symbol} 双向冻结,${remain}分钟后解冻`);
           execLog.push(`frozen:${trade.symbol}`);
           continue;
         }
