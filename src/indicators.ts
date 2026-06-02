@@ -92,6 +92,27 @@ function calcEMA(data: number[], p: number) {
   return ema;
 }
 
+/**
+ * 反转信号验证：ADX范围 + MACD方向 + RSI极端 + 成交量放大
+ * 条件：MACD方向 + RSI极端 + 成交量>均量1.3倍，全部满足
+ */
+export function isReversalConfirmed(
+  closes: number[],
+  volumes: number[],
+  rsi14: number,
+  adx: number,
+): boolean {
+  if (adx < 20 || adx > 55 || closes.length < 35) return false;
+  const macd = calcMACD(closes);
+  if (macd.signal === "数据不足") return false;
+  const cond1 = (rsi14 < 30 && macd.signal === "bullish") || (rsi14 > 70 && macd.signal === "bearish");
+  const vols = volumes.slice(-6);
+  const curVol = vols[vols.length - 1];
+  const avgVol = vols.slice(0, -1).reduce((a, b) => a + b, 0) / Math.max(1, vols.length - 1);
+  const cond2 = curVol > avgVol * 1.3;
+  return cond1 && cond2;
+}
+
 /** MACD(12,26,9): 返回 DIF、DEA、柱状图方向 */
 export function calcMACD(closes: number[]): { dif: string; dea: string; hist: string; signal: string } {
   if (closes.length < 35) { return { dif: "数据不足", dea: "", hist: "", signal: "数据不足" }; }

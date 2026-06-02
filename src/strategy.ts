@@ -1,6 +1,6 @@
 import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
-import { calcIndicators, calcMarketQuality, checkExtremeDeviation, convertCandles } from "./indicators";
+import { calcIndicators, calcMarketQuality, checkExtremeDeviation, convertCandles, isReversalConfirmed } from "./indicators";
 import { setAtrCache, setRsiCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor } from "./state";
 import { logger } from "./logger";
 import { runBacktest, generateBacktestSummary, isHighQualitySignal, type BacktestResult } from "./backtest";
@@ -77,11 +77,11 @@ export async function generateStrategyReport(
     const dailyAdx = id.adx;
     // 日线ADX>50时强制跟随日线方向，1h回测的反转信号不适用
     // 反转标志保留给持仓管理用——已有亏损仓位仍按反转平仓
-    if (bt.optimalStrategy === "reversal" && dailyAdx > 50) {
+    if (bt.optimalStrategy === "reversal" && dailyAdx > 58) {
       bt.reversalSignal = true;  // 保留原始反转标志
       bt.optimalStrategy = "continuation";
       bt.confidence = Math.min(100, bt.confidence + 20);
-      logger.info(`[BT] ${sym}: 日线ADX${dailyAdx.toFixed(0)}>50, 回测反转→延续`);
+      logger.info(`[BT] ${sym}: 日线ADX${dailyAdx.toFixed(0)}>58, 回测反转→延续`);
     }
     // 行情六类分类
     const regime = classifyRegime(dailyAdx, dailyUp, p, id.ema20, id.ema50);
@@ -346,9 +346,22 @@ export async function generateStrategyReport(
     if (posBt && (posBt.contAccuracy - posBt.revAccuracy) > 15) {
       rr = `延续主导(c${posBt.contAccuracy.toFixed(0)}>r${posBt.revAccuracy.toFixed(0)}%),忽略反转`;
     } else if ((posBt?.optimalStrategy === "reversal" || posBt?.reversalSignal) && pnl < 3) {
-      // 反转模式只平亏损或微利仓位，已盈利≥3%的不平（交给跟踪止盈锁利）
-      ac = "close";
-      rr = `回测反转模式, 平仓(${pnl.toFixed(1)}%)`;
+      // 反转信号验证：盈利仓位需MACD/RSI/成交量确认才平
+      if (pnl > 0 && c.length >= 35 && o?.["1h"]) {
+        const closes = c.map(x => x[4]);
+        const volumes = o["1h"].map((x: any) => x[5]);
+        if (isReversalConfirmed(closes, volumes, i.rsi14, i.adx)) {
+          ac = "close"; rr = `MACD/RSI确认反转,平仓(${pnl.toFixed(1)}%)`;
+        } else {
+          rr = `反转未确认(MACD/RSI不配合),忽略(${pnl.toFixed(1)}%)`;
+        }
+      } else {
+        if (i.adx > 55) {
+          rr = `ADX${i.adx.toFixed(0)}>55,反转不可信,忽略(${pnl.toFixed(1)}%)`;
+        } else {
+          ac = "close"; rr = `回测反转模式,平仓(${pnl.toFixed(1)}%)`;
+        }
+      }
     } else {
     // 用回测结果调整极端行情检测：延续模式不轻易平仓
     const skipClose = posBt?.optimalStrategy === "continuation" && (i.adx > 55);
