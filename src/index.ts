@@ -176,11 +176,11 @@ async function executeFullClose(
     // 单向超时自动恢复
     if (longPaused && longPauseUntil > 0 && Date.now() >= longPauseUntil) {
       longPaused = false; longPauseUntil = 0; longPnlBuf.length = 0;
-      logger.info(`🔓 做空暂停到期,恢复做多`);
+      logger.info(`🔓 做多暂停到期,恢复做多`);
     }
     if (shortPaused && shortPauseUntil > 0 && Date.now() >= shortPauseUntil) {
       shortPaused = false; shortPauseUntil = 0; shortPnlBuf.length = 0;
-      logger.info(`🔓 做多暂停到期,恢复做空`);
+      logger.info(`🔓 做空暂停到期,恢复做空`);
     }
     // 双向冻结
     if (longPaused && shortPaused && dualFrozenUntil === 0) {
