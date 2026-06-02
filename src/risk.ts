@@ -83,6 +83,26 @@ export interface StopLossResult {
 }
 
 /**
+ * 检查浮盈保护：峰值浮盈>3%后回撤过半 → 平仓锁利
+ * 防止浮盈转亏（分析显示两账号共26笔浮盈>0.8%最终亏损）
+ */
+export function checkProfitProtect(
+  peakPnlPct: number,
+  currentPnlPct: number,
+): { shouldClose: boolean; reason: string } | null {
+  if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
+  // 保护线 = 峰值的50%，最低保留1.5%
+  const protectLine = Math.max(peakPnlPct * 0.5, 1.5);
+  if (currentPnlPct < protectLine) {
+    return {
+      shouldClose: true,
+      reason: `浮盈保护: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${protectLine.toFixed(1)}%`,
+    };
+  }
+  return null;
+}
+
+/**
  * 检查是否触发止损（ATR 动态止损）
  * 止损距离 = 1.5 × ATR% × 杠杆，限制在 5%~10% 之间
  * 强趋势中正常回调幅度大，需要更宽的止损容忍度

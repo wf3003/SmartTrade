@@ -11,7 +11,7 @@ import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
 import { checkExtremeDeviation, calcMACD } from "./indicators";
-import { checkAccountRisk, checkStopLoss, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
+import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
@@ -403,6 +403,22 @@ async function monitorPositions() {
         }
       }
 
+      // 【优化】浮盈保护：峰值>3%后回撤过半 → 平仓
+      // 在跟踪止盈之前检查（避免浮盈大幅回吐）
+      if (peakPnl > 0 && pos.qty > 0) {
+        const profitProtect = checkProfitProtect(peakPnl, pnlPct);
+        if (profitProtect?.shouldClose) {
+          logger.warn(`🔒 ${profitProtect.reason} | ${pos.symbol}`);
+          try {
+            await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pnlPct, "profit_protect");
+            closedThisCycle.add(pos.symbol);
+          } catch (e: any) {
+            logger.error(`浮盈保护平仓失败 ${pos.symbol}: ${e.message}`);
+          }
+          continue;
+        }
+      }
+
       // 跟踪止盈：峰值越高回撤容忍度越大 — 四档阶梯（防峰值15%被1%回撤吞掉）
       const trailLev = Math.max(pos.leverage || 1, 1);
       const pricePnl = pnlPct / trailLev;          // 当前实际价格涨跌%
@@ -690,11 +706,11 @@ async function aiDecisionCycle() {
         continue;
       }
 
-      // 30分钟保护：持仓太新只预警不平仓（防开仓瞬间被AI关）
+      // 3分钟保护：持仓太新只预警不平仓（防开仓瞬间被AI关）
       const posAge = newPositionTime.has(symbol)
         ? (Date.now() - (newPositionTime.get(symbol) || 0)) / 60000
         : 999;
-      if (posAge < 30) {
+      if (posAge < 3) {
         logger.warn(`🤖 AI 预警: ${symbol} → close ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${cmd.reason} (太新，仅提示)`);
         updateDecisionStatus(decId, "success");
         continue;

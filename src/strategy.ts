@@ -172,12 +172,17 @@ export async function generateStrategyReport(
           cf = isStrong ? 0.85 : 0.7;
         } else if (maDist > entryBand * 0.6) {
           const isStrong = regime.startsWith("强趋势");
-          if (maDist > 2 && dailyAdx < 60) {
+          // 【优化】追多距离保护：偏离超过2×ATR且非极端趋势时拦截
+          const distAtRatio = Math.abs(maDist) / Math.max(at, 0.01);
+          if (distAtRatio > 2 && !isStrong && dailyAdx < 55) {
+            re = `${regime}/超涨${maDist.toFixed(1)}%(${distAtRatio.toFixed(0)}×ATR)禁止追多,等回调`;
+          } else if (maDist > 2 && dailyAdx < 60) {
             re = `${regime}/偏离EMA${maDist.toFixed(2)}%等回调`;
           } else {
             const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
             sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/追多(${maDist.toFixed(2)}%)`;
-            cf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
+            const baseCf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
+            cf = distAtRatio > 2 ? Math.max(0.25, baseCf - 0.15) : baseCf;
             if (bt.optimalStrategy === "continuation" && bt.avgADX > 40) cf = Math.max(cf, 0.65);
           }
         } else {
@@ -193,12 +198,17 @@ export async function generateStrategyReport(
           cf = isStrong ? 0.85 : 0.7;
         } else if (maDist < -entryBand * 0.6) {
           const isStrong = regime.startsWith("强趋势");
-          if (Math.abs(maDist) > 2 && dailyAdx < 60) {
+          // 【优化】追空距离保护：偏离超过2×ATR且非极端趋势时拦截
+          const distAtRatio = Math.abs(maDist) / Math.max(at, 0.01);
+          if (distAtRatio > 2 && !isStrong && dailyAdx < 55) {
+            re = `${regime}/超跌${Math.abs(maDist).toFixed(1)}%(${distAtRatio.toFixed(0)}×ATR)禁止追空,等反弹`;
+          } else if (Math.abs(maDist) > 2 && dailyAdx < 60) {
             re = `${regime}/偏离EMA${Math.abs(maDist).toFixed(2)}%等反弹`;
           } else {
             const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
             sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/追空(${maDist.toFixed(2)}%)`;
-            cf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
+            const baseCf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
+            cf = distAtRatio > 2 ? Math.max(0.25, baseCf - 0.15) : baseCf;
             if (bt.optimalStrategy === "continuation" && bt.avgADX > 40) cf = Math.max(cf, 0.65);
           }
         } else {
@@ -327,7 +337,10 @@ export async function generateStrategyReport(
       ac = "close";
       rr = `5根K线趋势转向, 平仓(${pnl.toFixed(1)}%)`;
     } else
-    if ((posBt?.optimalStrategy === "reversal" || posBt?.reversalSignal) && pnl < 3) {
+    // 【优化】延续策略主导(>15%)的币种，反转信号不触发平仓
+    if (posBt && (posBt.contAccuracy - posBt.revAccuracy) > 15) {
+      rr = `延续主导(c${posBt.contAccuracy.toFixed(0)}>r${posBt.revAccuracy.toFixed(0)}%),忽略反转`;
+    } else if ((posBt?.optimalStrategy === "reversal" || posBt?.reversalSignal) && pnl < 3) {
       // 反转模式只平亏损或微利仓位，已盈利≥3%的不平（交给跟踪止盈锁利）
       ac = "close";
       rr = `回测反转模式, 平仓(${pnl.toFixed(1)}%)`;
