@@ -844,7 +844,22 @@ async function aiDecisionCycle() {
         if (trade.action === "hold") continue;
         const regime = (trade as any).regime || "";
         const regimeThreshold = regime.startsWith("强趋势") ? 0.35 : regime.startsWith("弱趋势") ? 0.40 : regime.includes("震荡") ? 0.55 : 0.80;
-        // 【优化】方向暂停检查
+        // 【优化】方向暂停&超时检查
+        if (longPaused && longPauseUntil > 0 && Date.now() >= longPauseUntil) {
+          longPaused = false; longPauseUntil = 0; longPnlBuf.length = 0;
+          logger.info(`🔓 做多暂停到期(决策循环),恢复做多`);
+        }
+        if (shortPaused && shortPauseUntil > 0 && Date.now() >= shortPauseUntil) {
+          shortPaused = false; shortPauseUntil = 0; shortPnlBuf.length = 0;
+          logger.info(`🔓 做空暂停到期(决策循环),恢复做空`);
+        }
+        if (dualFrozenUntil > 0 && Date.now() >= dualFrozenUntil) {
+          longPaused = false; shortPaused = false;
+          longPnlBuf.length = 0; shortPnlBuf.length = 0;
+          longPauseUntil = 0; shortPauseUntil = 0;
+          dualFrozenUntil = 0;
+          logger.info(`🔓 双向冻结到期(决策循环),方向计数重置`);
+        }
         const tradeDir = trade.action === "buy" ? "long" : "short";
         if (dualFrozenUntil > Date.now()) {
           const remain = Math.ceil((dualFrozenUntil - Date.now()) / 60000);
