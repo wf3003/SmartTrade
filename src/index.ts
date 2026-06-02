@@ -55,6 +55,8 @@ const shortPnlBuf: number[] = [];
 let longPaused = false;
 let shortPaused = false;
 let dualFrozenUntil = 0;
+let longPauseUntil = 0;
+let shortPauseUntil = 0;
 // 连续止损计数按天衰减：超过24h未新止损则计数减1
 function decayStopCount(symbol: string): void {
   const expiry = stopCooldown.get(symbol);
@@ -165,9 +167,20 @@ async function executeFullClose(
     dirBuf.push(actualPnlPct > 0 ? 1 : 0);
     if (dirBuf.length > 3) dirBuf.shift();
     if (actualPnlPct > 0) {
-      if (side === "long") longPaused = false; else shortPaused = false;
+      if (side === "long") { longPaused = false; longPauseUntil = 0; }
+      else { shortPaused = false; shortPauseUntil = 0; }
     } else if (dirBuf.length >= 2 && dirBuf.filter(v => v === 0).length >= 2) {
-      if (side === "long") longPaused = true; else shortPaused = true;
+      if (side === "long") { longPaused = true; longPauseUntil = Date.now() + 30 * 60 * 1000; }
+      else { shortPaused = true; shortPauseUntil = Date.now() + 30 * 60 * 1000; }
+    }
+    // 单向超时自动恢复
+    if (longPaused && longPauseUntil > 0 && Date.now() >= longPauseUntil) {
+      longPaused = false; longPauseUntil = 0; longPnlBuf.length = 0;
+      logger.info(`🔓 做空暂停到期,恢复做多`);
+    }
+    if (shortPaused && shortPauseUntil > 0 && Date.now() >= shortPauseUntil) {
+      shortPaused = false; shortPauseUntil = 0; shortPnlBuf.length = 0;
+      logger.info(`🔓 做多暂停到期,恢复做空`);
     }
     // 双向冻结
     if (longPaused && shortPaused && dualFrozenUntil === 0) {
@@ -178,6 +191,7 @@ async function executeFullClose(
     if (dualFrozenUntil > 0 && Date.now() >= dualFrozenUntil) {
       longPaused = false; shortPaused = false;
       longPnlBuf.length = 0; shortPnlBuf.length = 0;
+      longPauseUntil = 0; shortPauseUntil = 0;
       dualFrozenUntil = 0;
       logger.info(`🔓 冻结到期, 方向计数重置`);
     }
@@ -840,8 +854,10 @@ async function aiDecisionCycle() {
           continue;
         }
         if ((tradeDir === "long" && longPaused) || (tradeDir === "short" && shortPaused)) {
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `方向暂停${tradeDir}` });
-          logger.info(`⏸️ ${trade.symbol} 方向暂停${tradeDir},跳过`);
+          const until = tradeDir === "long" ? longPauseUntil : shortPauseUntil;
+          const remain = until > 0 ? Math.ceil((until - Date.now()) / 60000) : '?';
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `方向暂停${tradeDir},剩${remain}分` });
+          logger.info(`⏸️ ${trade.symbol} 方向暂停${tradeDir},${remain}分钟后解冻`);
           execLog.push(`dirPause:${trade.symbol}`);
           continue;
         }
