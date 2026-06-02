@@ -105,7 +105,7 @@ async function executeFullClose(
   pnl: number,
   pnlPct: number,
   closeType: string,
-): Promise<{ closeResult: any }> {
+): Promise<{ closeResult: any; actualPnl: number; actualPnlPct: number }> {
   // 平仓前重新拉一次持仓，拿到最新快照盈亏
   let snapPnl = pnl, snapPnlPct = pnlPct;
   try {
@@ -153,7 +153,7 @@ async function executeFullClose(
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
   setTimeout(() => _recentlyClosed.delete(symbol), 30000);
-  return { closeResult };
+  return { closeResult, actualPnl, actualPnlPct };
 }
 
 /** 统一部分平仓：流水账模式 — INSERT 减仓记录，不改原记录状态 */
@@ -702,7 +702,7 @@ async function aiDecisionCycle() {
 
       if (!pos) {
         logger.info(`📋 AI 持仓决策: ${symbol} → 持仓已不在 (${cmd.reason})`);
-        updateDecisionStatus(decId, "success");
+        updateDecisionStatus(decId, "skipped", `持仓已不存在,未执行.${cmd.reason}`);
         continue;
       }
 
@@ -711,8 +711,9 @@ async function aiDecisionCycle() {
         ? (Date.now() - (newPositionTime.get(symbol) || 0)) / 60000
         : 999;
       if (posAge < 3) {
-        logger.warn(`🤖 AI 预警: ${symbol} → close ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${cmd.reason} (太新，仅提示)`);
-        updateDecisionStatus(decId, "success");
+        const skipReason = `新仓保护:持仓${posAge.toFixed(0)}分<3分,跳过.${cmd.reason}`;
+        logger.warn(`🤖 AI 预警: ${symbol} → close ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${skipReason}`);
+        updateDecisionStatus(decId, "skipped", skipReason);
         continue;
       }
 
@@ -721,12 +722,14 @@ async function aiDecisionCycle() {
       logger.info(`📋 AI 持仓决策: ${symbol} → close (${cmd.reason})`);
 
       try {
-        await executeFullClose(symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
-        updateDecisionStatus(decId, "success");
-        logger.warn(`  ✅ AI 平仓: ${symbol}`);
+        const { actualPnl, actualPnlPct } = await executeFullClose(symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
+        const result = `已平仓,PnL:$${actualPnl.toFixed(2)},${actualPnlPct.toFixed(2)}%.${cmd.reason}`;
+        updateDecisionStatus(decId, "success", result);
+        logger.warn(`  ✅ AI 平仓: ${symbol} $${actualPnl.toFixed(2)} (${actualPnlPct.toFixed(2)}%)`);
       } catch (e: any) {
-        updateDecisionStatus(decId, "failed");
-        logger.error(`  平仓失败: ${e.message}`);
+        const reason = `平仓失败:${e.message?.slice(0,60)}.${cmd.reason}`;
+        updateDecisionStatus(decId, "failed", reason);
+        logger.error(`  平仓失败: ${symbol} ${e.message}`);
       }
     }
 

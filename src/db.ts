@@ -198,7 +198,10 @@ export function insertDecision(d: {
   return info.lastInsertRowid;
 }
 
-export function updateDecisionStatus(id: number | bigint, status: string) {
+export function updateDecisionStatus(id: number | bigint, status: string, result?: string) {
+  if (result) {
+    return db.prepare("UPDATE decisions SET status = ?, raw_response = ? WHERE id = ?").run(status, result, id);
+  }
   return db.prepare("UPDATE decisions SET status = ? WHERE id = ?").run(status, id);
 }
 
