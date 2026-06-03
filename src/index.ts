@@ -10,6 +10,8 @@ import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
+import { runStrategyEngine } from "./strategies/index";
+import { getMarketReport } from "./agent";
 import { checkExtremeDeviation, calcMACD, calcIndicators, convertCandles } from "./indicators";
 import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
@@ -577,91 +579,38 @@ async function aiDecisionCycle() {
     }
     logger.info(`📡 K线:${ohlcvData.size}/${CONFIG.symbols.length}币种 行情:${tickers.size}/${CONFIG.symbols.length}币种`);
     
-    const report = await generateStrategyReport(tickers, ohlcvData, positions, account);
-    if (!report) { logger.warn("策略未返回信号"); return; }
-    setLatestReport(report);
-    newCycle();
-
-    // 5a. AI 方向复核（每周期一次）
-    let aiResult: AiCheckResult | null = null;
-    // AI 方向复核（每周期一次）
-    const tickerIndicators = Array.from(tickers.entries())
-      .map(([sym, t]) => {
-        const atr = (atrCache.get(sym) || 0.015) * 100;
-        const rsi = rsiCache.get(sym) || 50;
-        const analysis = report.analysis?.find((a: any) => a.symbol === sym);
-        // MACD(日线)
-        const ohlcv = ohlcvData.get(sym);
-        const c1d = ohlcv?.["1d"]?.map(c => c.close) || [];
-        const macd = calcMACD(c1d);
-        const macdStr = macd.signal !== "数据不足" ? `MACD:${macd.signal}` : "";
-        const volStr = t.volume24h ? `量${t.volume24h > 1e6 ? (t.volume24h/1e6).toFixed(1)+"M" : (t.volume24h/1e3).toFixed(1)+"K"}` : "";
-        const frStr = t.fundingRate !== undefined ? `费率${(t.fundingRate * 100).toFixed(3)}%` : "";
-        // 多周期EMA方向快照（每时间框架：EMA20方向+BB位置）
-        const tfSnaps: string[] = [];
-        for (const tf of ["5m","15m","1h","1d"]) {
-          const raw = ohlcv?.[tf];
-          if (raw && raw.length >= 8) {
-            const arr = convertCandles(raw);
-            const ind = calcIndicators(arr);
-            if (ind) {
-              const price = arr[arr.length-1][4];
-              const emaDir = price > ind.ema20 ? "↑" : "↓";
-              const bbP = ind.bbUpper > ind.bbLower ? Math.round((price-ind.bbLower)/(ind.bbUpper-ind.bbLower)*100) : 50;
-              const adx = ind.adx.toFixed(0);
-              const r = ind.rsi14.toFixed(0);
-              tfSnaps.push(`${tf}:${emaDir}20 ADX${adx} RSI${r} BB${bbP}%`);
-            }
-          }
-        }
-        const tfLine = tfSnaps.length > 0 ? tfSnaps.join(" ") : "";
-        return `${sym}:$${t.price?.toFixed(2)} RSI${rsi.toFixed(0)} ATR${atr.toFixed(1)}% ${frStr} ${volStr} ${macdStr} ${analysis?.analysis_1d || ""}
-  ${tfLine}`;
-      }).join("\n");
-    // 持仓数据：合并交易所持仓 + 策略分析（让AI能基于趋势/RSI/策略判断该不该平仓）
-    const posLines = positions.length > 0
-      ? positions.map(p => {
-          const analysis = report.analysis?.find((a: any) => a.symbol === p.symbol);
-          const atr = (atrCache.get(p.symbol) || 0.015) * 100;
-          const rsi = rsiCache.get(p.symbol) || 50;
-          const btLine = (report.backtestSummaries || []).find((l: string) => l.startsWith(p.symbol)) || "";
-          const pc = report.positions?.find((c: any) => c.symbol === p.symbol);
-          const stratAdvice = pc && pc.action !== "hold" ? ` [策略建议:${pc.action}]` : "";
-          return `${p.symbol} ${p.side} PnL:${(p.unrealizedPnlPct||0).toFixed(1)}% ${p.leverage}x RSI${rsi.toFixed(0)} ATR${atr.toFixed(1)}% ${btLine}${stratAdvice}`;
-        }).join("\n")
-      : "无";
-    aiResult = await aiDirectionCheck(report.newTrades, tickerIndicators, posLines, (report.backtestSummaries || []).join("\n"));
-    if (aiResult) {
-      if (aiResult.signals.size > 0) {
-        const logStr = Array.from(aiResult.signals.entries()).map(([s, d]) => `${s}:评分${d.score}`).join(" | ");
-        logger.info(`🤖 AI 方向复核: ${logStr}`);
-        for (const [s, d] of aiResult.signals.entries()) {
-          logger.info(`   ${s}: 评分${d.score} — ${d.reason}`);
-        }
-      }
-      if (aiResult.positions.length > 0) {
-        const posAct = aiResult.positions.filter(p => p.action !== "hold");
-        for (const p of posAct) {
-          logger.warn(`🤖 AI 持仓建议: ${p.symbol} → ${p.action} — ${p.reason}`);
-        }
-        const holdCnt = aiResult.positions.filter(p => p.action === "hold").length;
-        logger.info(`🤖 AI 持仓评估: ${aiResult.positions.length}个, ${posAct.length}个非hold, ${holdCnt}个hold`);
-      }
-      // 注入 AI 结果到前端
+    // === 策略引擎: 三个独立策略分析 ===
+    const strategyReport = runStrategyEngine(tickers, ohlcvData, positions, account);
+    logger.info(`📡 策略引擎: ${strategyReport.analyses.length}币种 | ${strategyReport.summary}`);
+    
+    // === AI 投资委员会主席: 综合决策 ===
+    const aiReport = await getMarketReport(strategyReport, positions, account, recentDecs, openTrades);
+    if (!aiReport) { logger.warn("AI主席未返回决策"); return; }
+    
+    const report = aiReport as any;
+    // 注入 aiReview 供前端展示
+    {
       const aiReviewArr: any[] = [];
-      for (const [s, d] of aiResult.signals.entries()) {
-        aiReviewArr.push({ symbol: s, score: d.score, reason: d.reason });
+      for (const t of aiReport.newTrades) {
+        aiReviewArr.push({
+          symbol: t.symbol,
+          score: Math.round((t.confidence || 0.5) * 100),
+          reason: t.reason || "",
+        });
       }
       (report as any).aiReview = aiReviewArr;
-      if (aiResult.positions.length > 0) {
-        (report as any).aiPositions = aiResult.positions;
+    }
+    setLatestReport(report);
+    newCycle();
+    
+    logger.info(`📊 AI主席: ${aiReport.analysis.length}分析 | ${aiReport.positions.length}持仓指令 | ${aiReport.newTrades.filter(t=>t.action!=='hold').length}信号`);
+    for (const pos of aiReport.positions) {
+      if (pos.action !== "hold") {
+        logger.warn(`🤖 持仓决策: ${pos.symbol} → ${pos.action} — ${pos.reason}`);
       }
-      // 市场偏向修正已移除（AI自行判断）
     }
 
-    // 5. 合并策略引擎 + AI 持仓管理指令，去重执行
-    //    来源1: report.positions（策略引擎基于技术指标）
-    //    来源2: aiResult.positions（AI 大模型直接输出，优先级更高）
+    // 5. 持仓管理: AI主席直接输出的平仓指令
     const mergedCommands = new Map<string, {
       action: "close";
       reason: string;
@@ -675,17 +624,6 @@ async function aiDecisionCycle() {
           action: "close",
           reason: pc.reason,
           confidence: pc.confidence || 0.7,
-        });
-      }
-    }
-    // AI 指令覆盖策略指令（AI 优先级更高）
-    if (aiResult?.positions) {
-      for (const ap of aiResult.positions) {
-        if (ap.action === "hold") continue;
-        mergedCommands.set(ap.symbol, {
-          action: "close",
-          reason: ap.reason,
-          confidence: 0.7,
         });
       }
     }
@@ -753,8 +691,8 @@ async function aiDecisionCycle() {
       }
     } else if (report.newTrades && report.newTrades.length > 0) {
       const actionable = report.newTrades
-        .filter(t => t.action !== "hold")
-        .sort((a, b) => (Math.abs(b.score || 0)) - (Math.abs(a.score || 0)));
+        .filter((t: any) => t.action !== "hold")
+        .sort((a: any, b: any) => (b.confidence || 0) - (a.confidence || 0));
       if (actionable.length === 0) {
         logger.info(`📋 本轮决策无开仓 (${report.newTrades.length}条均为hold)`);
         execLog.push("AI 全部观望，无开仓");
@@ -800,52 +738,44 @@ async function aiDecisionCycle() {
           continue;
         }
 
-        // AI评分过滤：<30跳过，30-50四分之一仓，50-70半仓
-        const aiScore = aiResult?.signals.get(`${trade.symbol}:${trade.action}`)?.score;
-        if (aiScore === undefined || aiScore === null) {
-          const msg = `⏭️ ${trade.symbol} AI评分缺失，跳过`;
-          tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: "AI评分缺失" });
-          logger.warn(msg); execLog.push(msg); continue;
-        }
-        if (aiScore < 30) {
-          const aiRsn = aiResult?.signals.get(`${trade.symbol}:${trade.action}`)?.reason || "评分不足";
-          const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<30，跳过 (${aiRsn})`;
-          tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI评分${aiScore}: ${aiRsn}` });
+        // AI主席置信度过滤：<0.3跳过，0.3-0.5轻仓，0.5-0.7半仓
+        const aiScore = Math.round((trade.confidence || 0.5) * 100);
+        if (trade.confidence < 0.3 || aiScore < 30) {
+          const aiRsn = trade.reason || "置信度不足";
+          const msg = `⏭️ ${trade.symbol} AI置信度${aiScore}<30，跳过 (${aiRsn})`;
+          tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI置信度${aiScore}: ${aiRsn}` });
           logger.info(msg);
           execLog.push(msg);
           continue;
         }
         if (aiScore < 50) {
-          
           trade.amountPercent = Math.round(trade.amountPercent / 4);
-          logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位降至1/4=${trade.amountPercent}%`);
+          logger.info(`   ${trade.symbol} AI置信度${aiScore}，仓位降至1/4=${trade.amountPercent}%`);
         } else if (aiScore < 70) {
-          
           trade.amountPercent = Math.round(trade.amountPercent / 2);
-          logger.info(`   ${trade.symbol} AI 评分${aiScore}，仓位减半至${trade.amountPercent}%`);
+          logger.info(`   ${trade.symbol} AI置信度${aiScore}，仓位减半至${trade.amountPercent}%`);
         }
 
-        // 行情质量：规则 mq + AI marketQuality 取平均
-        const ruleMq = (trade as any).marketQuality ?? 50;
-        const aiMq = aiResult?.marketQuality ?? 50;
-        const finalMq = Math.round((ruleMq + aiMq) / 2);
-        if (finalMq < 20) {
-          const msg = `⏭️ ${trade.symbol} 综合行情质量${finalMq}<20，跳过 (规则${ruleMq} AI${aiMq})`;
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${finalMq})` });
+        // 行情质量：从策略引擎获取
+        const sa = strategyReport.analyses.find(a => a.symbol === trade.symbol);
+        const mq = sa?.sentiment?.marketQuality ?? 50;
+        if (mq < 20) {
+          const msg = `⏭️ ${trade.symbol} 行情质量${mq}<20，跳过`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${mq})` });
           logger.info(msg);
           execLog.push(msg);
           continue;
-        } else if (finalMq < 40) {
-          trade.amountPercent = Math.round(trade.amountPercent * 0.5);  // 再减半
+        } else if (mq < 40) {
+          trade.amountPercent = Math.round(trade.amountPercent * 0.5);
           trade.leverage = Math.max(2, trade.leverage - 2);
-          logger.info(`   ${trade.symbol} 综合行情质量${finalMq}，仓位再减半至${trade.amountPercent}%，杠杆降至${trade.leverage}x`);
-        } else if (finalMq < 70) {
-          trade.amountPercent = Math.round(trade.amountPercent * 0.75); // 减1/4
-          logger.info(`   ${trade.symbol} 综合行情质量${finalMq}，仓位降至${trade.amountPercent}%`);
+          logger.info(`   ${trade.symbol} 行情质量${mq}，仓位再减半至${trade.amountPercent}%，杠杆降至${trade.leverage}x`);
+        } else if (mq < 70) {
+          trade.amountPercent = Math.round(trade.amountPercent * 0.75);
+          logger.info(`   ${trade.symbol} 行情质量${mq}，仓位降至${trade.amountPercent}%`);
         }
 
-        const aiRsn = aiResult?.signals.get(`${trade.symbol}:${trade.action}`)?.reason || "无AI分析";
-        const aiSc = aiResult?.signals.get(`${trade.symbol}:${trade.action}`)?.score ?? 0;
+        const aiRsn = trade.reason || "无AI分析";
+        const aiSc = aiScore;
         const side = trade.action === "buy" ? "long" : "short";
         const margin = Number(account.availableBalance) * trade.amountPercent / 100;
         const ticker = tickers.get(trade.symbol);
