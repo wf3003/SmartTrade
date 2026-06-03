@@ -774,13 +774,13 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} 行情质量${mq}，仓位降至${trade.amountPercent}%`);
         }
 
-        // 入场质量硬阻断：方向对应的评分 < 30 不开仓
+        // 入场质量硬阻断：方向对应的评分 < 20 不开仓
         if (sa?.entryQuality) {
           const entryScore = trade.action === "buy"
             ? sa.entryQuality.longEntryScore
             : sa.entryQuality.shortEntryScore;
-          if (entryScore < 30) {
-            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<30，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
+          if (entryScore < 20) {
+            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<20，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
             logger.info(msg);
             execLog.push(msg);
