@@ -116,10 +116,14 @@ reason必须含：费率方向+量状态+RSI，如有冲突项需列举。`;
     const parsed = JSON.parse(text);
     if (parsed.signals) {
       const aiBySym = new Map<string, any>();
-      for (const r of parsed.signals) aiBySym.set(r.symbol, r);
+      for (const r of parsed.signals) {
+        const k = r.action ? `${r.symbol}:${r.action}` : r.symbol;
+        aiBySym.set(k, r);
+      }
       for (const s of signals) {
-        const r = aiBySym.get(s.symbol);
-        if (r) result.signals.set(`${s.symbol}:${s.action}`, { score: r.score ?? 50, reason: r.reason || "" });
+        const key = `${s.symbol}:${s.action}`;
+        const r = aiBySym.get(key) || aiBySym.get(s.symbol);
+        if (r) result.signals.set(key, { score: r.score ?? 50, reason: r.reason || "" });
       }
     }
     if (parsed.positions) {
