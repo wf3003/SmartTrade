@@ -13,21 +13,19 @@ import { calcIndicators, convertCandles } from "../indicators";
 import { analyzeTechnicals, type TechnicalAnalysis } from "./technical";
 import { analyzeSentiment, type SentimentAnalysis } from "./sentiment";
 import { assessSymbolRisk, assessPortfolioRisk, type RiskAssessment, type PortfolioRisk } from "./risk-reward";
+import { assessEntryQuality, type EntryQuality } from "./entry-quality";
 import { CONFIG } from "../config";
 import { setAtrCache, setRsiCache } from "../state";
 import { logger } from "../logger";
 
 export interface StrategyOutput {
   symbol: string;
-  /** 结果1: 技术面 */
   technical: TechnicalAnalysis;
-  /** 结果2: 资金面 */
   sentiment: SentimentAnalysis;
-  /** 结果3: 风控 */
   risk: RiskAssessment;
-  /** 回测(历史准确率参考) */
+  /** 结果4: 入场质量 */
+  entryQuality: EntryQuality;
   backtest: BacktestResult | null;
-  /** 回测摘要文本 */
   backtestSummary: string;
 }
 
@@ -98,11 +96,15 @@ export function runStrategyEngine(
     const existingPos = positions.find(p => p.symbol === sym);
     const risk = assessSymbolRisk(sym, technical, sentiment, atrPct, existingPos);
 
+    // === 策略4: 入场质量 ===
+    const entryQuality = assessEntryQuality(ohlcv, sym);
+
     analyses.push({
       symbol: sym,
       technical,
       sentiment,
       risk,
+      entryQuality,
       backtest,
       backtestSummary,
     });
@@ -125,6 +127,7 @@ export function runStrategyEngine(
     promptParts.push(a.technical.analysis);
     promptParts.push(a.sentiment.analysis);
     promptParts.push(a.risk.analysis);
+    promptParts.push(a.entryQuality.analysis);
     if (a.backtestSummary) {
       promptParts.push(`回测: ${a.backtestSummary}`);
     }
@@ -143,6 +146,12 @@ export function runStrategyEngine(
   }
 
   promptParts.push(`\n${portfolioRisk.analysis}`);
+  promptParts.push(`\n## 入场质量硬规则（必须遵守）`);
+  promptParts.push(`风控策略的 riskAppetite 和入场质量评分是硬约束：`);
+  promptParts.push(`- 入场质量做多评分 < 30 → 不开多头新仓（做多时机差,追高风险大）`);
+  promptParts.push(`- 入场质量做空评分 < 30 → 不开空头新仓（做空时机差,追空风险大）`);
+  promptParts.push(`- 入场质量整体 suggestion 为 unfavorable → 当前周期不应开任何新仓`);
+  promptParts.push(`- 对已有持仓：如果入场质量评分持续恶化（比开仓时下降20+分）→ 考虑主动平仓`);
   promptParts.push(`\n【策略引擎评估摘要】${summary}`);
 
   const aiPromptContext = promptParts.join("\n");
