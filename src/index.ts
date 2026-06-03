@@ -35,7 +35,7 @@ import {
   insertAiReview,
 } from "./db";
 
-const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓
+const MONITOR_INTERVAL = 5_000;  // 每 5 秒检查持仓（原2秒，降低OKX限频压力）
 const DECISION_INTERVAL = 5 * 60_000; // 每 5 分钟策略决策
 const MINIMUM_ACCOUNT_STOP_USDT = CONFIG.accountStopLossUsdt;
 

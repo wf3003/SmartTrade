@@ -12,7 +12,7 @@ import { latestReport, cachedPositions, cachedAccount } from "./state";
 
 let _app: express.Express | null = null;
 let cycleStartTime = new Date().toISOString();
-// 行情缓存（5秒有效，减少 dashboard 重复请求）
+// 行情缓存（15秒有效，减少 dashboard 重复请求）
 let cachedTickers: Record<string, number> = {};
 let cachedTickersAt = 0;
 export let cycleNumber = 0;
@@ -37,10 +37,10 @@ export async function startServer(host?: string, port?: number) {
       const account = cachedAccount.totalEquity ? cachedAccount : await fetchWithTimeout(exchangeManager.getAccount(), cachedAccount);
       const positions = cachedPositions.length ? cachedPositions : await fetchWithTimeout(exchangeManager.getPositions(), cachedPositions);
 
-      // 并行获取全币种行情（5秒缓存防限频）
+      // 并行获取全币种行情（15秒缓存防限频）
       const now = Date.now();
       let tickers: Record<string, number> = {};
-      if (now - cachedTickersAt < 5000 && Object.keys(cachedTickers).length > 0) {
+      if (now - cachedTickersAt < 15000 && Object.keys(cachedTickers).length > 0) {
         tickers = cachedTickers;
       } else {
         const tResults = await Promise.allSettled(
