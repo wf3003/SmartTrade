@@ -18,7 +18,7 @@ export interface AiPositionSuggestion {
 }
 
 export interface AiCheckResult {
-  signals: Map<string, AiOpinion>;
+  signals: Map<string, AiOpinion>  // key = symbol:action (如 BTC/USDT:buy);
   positions: AiPositionSuggestion[];
   marketQuality?: number;  // AI 对整体行情质量的评分 0-100
   marketBias?: "bullish" | "bearish" | "balanced";  // AI 对市场整体偏向的判断
@@ -90,7 +90,7 @@ ${scoringAdvice}
  4. 对整个市场行情质量给出 market_quality 0-100
   回测结果仅作参考，多周期交叉验证优先。
 格式：
-{"signals":[{"symbol":"BTC/USDT","score":85,"reason":"(回测:延续 cf80%) 费率中性 量正常"},...],
+{"signals":[{"symbol":"BTC/USDT","action":"sell","score":85,"reason":"(回测:延续 cf80%) 费率中性 量正常"},...],
  "positions":[{"symbol":"ETH/USDT","action":"hold","reason":"趋势完好"},...],
  "market_quality":65}
 reason必须含：费率方向+量状态+RSI，如有冲突项需列举。`;
@@ -108,7 +108,7 @@ reason必须含：费率方向+量状态+RSI，如有冲突项需列举。`;
     const parsed = JSON.parse(text);
     if (parsed.signals) {
       for (const r of parsed.signals) {
-        result.signals.set(r.symbol, { score: r.score ?? 50, reason: r.reason || "" });
+        result.signals.set(`${r.symbol}:${r.action}`, { score: r.score ?? 50, reason: r.reason || "" });
       }
     }
     if (parsed.positions) {

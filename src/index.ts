@@ -784,10 +784,10 @@ async function aiDecisionCycle() {
         // AI 评分过滤：0-20跳过，20-40四分之一仓，40-70半仓，70+全仓
         // 策略评分 |score|≥12 时降低AI评分门槛（强趋势信号放宽过滤）
         // 但即使绕过也要求 aiScore ≥ 30，AI完全不认同的信号不开
-        const aiScore = aiResult?.signals.get(trade.symbol)?.score ?? 70;
+        const aiScore = aiResult?.signals.get(`${trade.symbol}:${trade.action}`)?.score ?? 70;
         const bypassAi = Math.abs(trade.score || 0) >= 12;
         if (aiScore < 30) {
-          const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "评分不足";
+          const aiRsn = aiResult?.signals.get(`${trade.symbol}:${trade.action}`)?.reason || "评分不足";
           const msg = `⏭️ ${trade.symbol} AI 评分${aiScore}<30，跳过 (${aiRsn})`;
           tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI评分${aiScore}: ${aiRsn}` });
           logger.info(msg);
@@ -826,8 +826,8 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} 综合行情质量${finalMq}，仓位降至${trade.amountPercent}%`);
         }
 
-        const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "无AI分析";
-        const aiSc = aiResult?.signals.get(trade.symbol)?.score ?? 0;
+        const aiRsn = aiResult?.signals.get(`${trade.symbol}:${trade.action}`)?.reason || "无AI分析";
+        const aiSc = aiResult?.signals.get(`${trade.symbol}:${trade.action}`)?.score ?? 0;
         const side = trade.action === "buy" ? "long" : "short";
         const margin = Number(account.availableBalance) * trade.amountPercent / 100;
         const ticker = tickers.get(trade.symbol);

@@ -128,7 +128,7 @@ export async function generateStrategyReport(
     const mqDesc = mq >= 70 ? '高质量' : mq >= 40 ? '中等' : mq >= 20 ? '低质量' : '差';
     const td = `${regimeDesc} | 行情质量:${mqDesc}(${mq})`;
     a.push({
-      symbol: sym, regime: regimeDesc, score: 0, trend: "neutral", strength: "weak",
+      symbol: sym, regime: regimeDesc, score: 0, trend: dailyUp ? "bullish" : "bearish", strength: dailyAdx >= 50 ? "strong" : dailyAdx >= 25 ? "moderate" : "weak",
       keyLevels: kl, summary: summaryDesc,
       analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: adxDesc(id.adx),
     });
