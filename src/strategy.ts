@@ -142,8 +142,16 @@ export async function generateStrategyReport(
     if (mq < 20) {
       logger.info(`[MQ] ${sym}: mq=${mq} 低质量行情, 留待AI判断`);
     }
+    // 多空同时发，AI自主选择方向
     nt.push({
-      action: p > i1.ema20 ? "buy" : "sell",  // 仅作参考方向，AI复核决定
+      action: "buy",
+      symbol: sym, leverage: adjLeverage, amountPercent: adjPct,
+      reason: baseRe, confidence: baseCf, score: baseScore,
+      stopLossPct: dynSlPct, takeProfitPct: dynTpPct,
+      regime: regimeDesc, marketQuality: mq,
+    } as any);
+    nt.push({
+      action: "sell",
       symbol: sym, leverage: adjLeverage, amountPercent: adjPct,
       reason: baseRe, confidence: baseCf, score: baseScore,
       stopLossPct: dynSlPct, takeProfitPct: dynTpPct,
