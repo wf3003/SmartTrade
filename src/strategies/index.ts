@@ -146,13 +146,16 @@ export function runStrategyEngine(
   }
 
   promptParts.push(`\n${portfolioRisk.analysis}`);
-  promptParts.push(`\n## 入场质量硬规则（必须遵守）`);
-  promptParts.push(`入场质量评分仅用于评估"现在是否适合开新仓"，与已有持仓的平仓决策无关：`);
-  promptParts.push(`- 入场质量做多评分 < 20 → 不开多头新仓（做多时机差,追高风险大）`);
-  promptParts.push(`- 入场质量做空评分 < 20 → 不开空头新仓（做空时机差,追空风险大）`);
-  promptParts.push(`- 入场质量整体 suggestion 为 unfavorable → 当前周期不开任何新仓`);
-  promptParts.push(`- 已有持仓的平仓决策基于：风控状态、盈亏保护、趋势变化、入场理由是否失效`);
-  promptParts.push(`- 注意：你只能对"当前持仓"列表中有的币种输出close指令。没有持仓的币种即使超卖严重也不输出close。`);
+  promptParts.push(`\n## 评分使用规则（必须遵守）`);
+  promptParts.push(`所有评分分为两类，注意区分用途：`);
+  promptParts.push(`【新开仓专用】入场质量评分、风控 riskAppetite：决定是否开新仓、开多少仓。`);
+  promptParts.push(`   - 做多评分<20 / 做空评分<20 → 不开该方向新仓`);
+  promptParts.push(`   - riskAppetite 的 avoid/low 是针对"如果此时新开仓"的风险，不是平仓信号`);
+  promptParts.push(`   - riskAppetite 因已有持仓降级是正常的（防止双开），不应解读为需要平仓`);
+  promptParts.push(`【持股/平仓专用】盈亏保护、趋势变化、入场理由是否失效：决定是否平仓。`);
+  promptParts.push(`   - 盈利持仓的入场质量或风控评分下降不构成平仓理由`);
+  promptParts.push(`   - 趋势确实反转、浮亏达止损线、入场理由不再成立 → 才平仓`);
+  promptParts.push(`- 只能对"当前持仓"列表中有的币种输出close。`);
   promptParts.push(`\n【策略引擎评估摘要】${summary}`);
 
   const aiPromptContext = promptParts.join("\n");
