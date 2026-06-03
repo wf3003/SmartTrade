@@ -6,6 +6,7 @@ import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { getTradeStats, getPartialClosePct } from "./db";
 import { openai } from "./ai-client";
+import { calcIndicators, convertCandles, calcMACD } from "./indicators";
 import type { MarketData, Position, AccountInfo } from "./exchanges";
 
 export interface CoinAnalysis {
@@ -48,7 +49,7 @@ export interface MarketReport {
   execution?: { log: string[] };
 }
 
-type OHLCVMap = Map<string, Record<string, { open: number; high: number; low: number; close: number }[]>>;
+type OHLCVMap = Map<string, Record<string, { open: number; high: number; low: number; close: number; volume?: number }[]>>;
 
 function buildPrompt(
   tickers: Map<string, MarketData>,
@@ -63,63 +64,78 @@ function buildPrompt(
     ? positions.map(p => {
         const db = openTrades.find((t: any) => t.symbol === p.symbol);
         const partial = db ? getPartialClosePct(db.id as number, db.entry_qty as number) : 0;
-        return `${p.symbol} ${p.side} | 入场:$${p.entryPrice?.toFixed(2)} | PnL:${p.unrealizedPnlPct?.toFixed(2)}% | 保证金:$${p.margin?.toFixed(2)} | 已分批:${partial}%`;
+        const liqDist = p.liquidationPrice && p.entryPrice
+          ? Math.abs((p.liquidationPrice - p.entryPrice) / p.entryPrice * 100 / (p.leverage || 1)).toFixed(1)
+          : '?';
+        return `${p.symbol} ${p.side} | 入场:$${p.entryPrice?.toFixed(2)} | PnL:${p.unrealizedPnlPct?.toFixed(2)}% | 清算距:${liqDist}% | 保证金:$${p.margin?.toFixed(2)} | 杠杆:${p.leverage}x${partial > 0 ? ` | 已分批:${partial}%` : ''}`;
       }).join("\n")
     : "无持仓";
 
-  // 计算关键价位的衍生数据（精简格式：直接给多周期信号）
+  // 每个币种发完整技术指标（ADX/RSI/ATR/EMA/BB/量/MACD），取代旧MA5/MA10判断
   const coinLines: string[] = [];
   for (const sym of CONFIG.symbols) {
     const t = tickers.get(sym);
     if (!t) continue;
-    const tfSignals: { tf: string; direction: string; strength: string; change: string }[] = [];
-
     const ohlcv = ohlcvData.get(sym);
-    if (ohlcv) {
-      for (const tf of ["1m", "5m", "15m", "1h", "1d"]) {
-        const candles = ohlcv[tf];
-        if (!candles || candles.length < 3) continue;
-        const c = candles;
-        const close = c[c.length-1].close;
-        const openFirst = c[0].open;
-        const change = ((close - openFirst) / openFirst * 100);
-        // 判断多空：价格相对 MA5/MA10 的位置
-        const ma5 = c.slice(-5).reduce((s,x) => s + x.close, 0) / Math.min(5, c.length);
-        const ma10 = c.reduce((s,x) => s + x.close, 0) / c.length;
-        const aboveMA5 = close > ma5;
-        const aboveMA10 = close > ma10;
-        let direction = "中性";
-        let strength = "中";
-        if (aboveMA5 && aboveMA10) { direction = "看涨"; strength = Math.abs(close/ma5-1) > 0.005 ? "强" : "中"; }
-        else if (!aboveMA5 && !aboveMA10) { direction = "看跌"; strength = Math.abs(close/ma5-1) > 0.005 ? "强" : "中"; }
-        else { direction = aboveMA5 ? "偏涨" : "偏跌"; strength = "弱"; }
-        tfSignals.push({ tf, direction, strength, change: change.toFixed(1) });
+    const tfOut: string[] = [];
+    for (const tf of ["1m", "5m", "15m", "1h", "1d"]) {
+      const raw = ohlcv?.[tf];
+      if (!raw || raw.length < 8) continue;
+      const arr = convertCandles(raw);
+      const ind = calcIndicators(arr);
+      if (!ind) continue;
+      const price = arr[arr.length - 1][4];
+      const openFirst = arr[0][4];
+      const volArr = arr.map(x => x[5]);
+      const lastVol = volArr[volArr.length - 1];
+      const avgVol = ind.volumeAvg || 1;
+      const volRatio = lastVol / avgVol;
+      const chg = ((price - openFirst) / openFirst * 100);
+      const ema20Dev = ((price - ind.ema20) / ind.ema20 * 100);
+      const ema50Dev = ((price - ind.ema50) / ind.ema50 * 100);
+      const bbPos = ind.bbUpper > ind.bbLower
+        ? ((price - ind.bbLower) / (ind.bbUpper - ind.bbLower) * 100) : 50;
+      // ADX/RSI 标签
+      const adxSuf = ind.adx >= 75 ? '*' : ind.adx < 25 ? '~' : '';
+      const rsiSuf = (ind.rsi14 <= 30 || ind.rsi14 >= 70) ? '!' : '';
+      // 成交量标签
+      let volStr = `${volRatio.toFixed(1)}×(平)`;
+      if (volRatio < 0.8) volStr = `${volRatio.toFixed(1)}×(缩)`;
+      else if (volRatio > 1.2) volStr = `${volRatio.toFixed(1)}×(放量${chg >= 0 ? '↑' : '↓'})`;
+      // BB 位置
+      let bbStr = '';
+      if (bbPos <= 25) bbStr = `BB下(${bbPos.toFixed(0)}%)`;
+      else if (bbPos >= 75) bbStr = `BB上(${bbPos.toFixed(0)}%)`;
+      // MACD (仅 1h 和 1d)
+      let macdStr = '';
+      if (tf === '1h' || tf === '1d') {
+        const closes = arr.map(x => x[4]);
+        const m = calcMACD(closes);
+        if (m.signal !== "数据不足") macdStr = `MACD:${m.signal}`;
       }
+      const emaArrow = ema20Dev >= 0 ? '↑' : '↓';
+      // 组装一行
+      const parts = [
+        `ADX${ind.adx.toFixed(0)}${adxSuf}`,
+        `RSI${ind.rsi14.toFixed(0)}${rsiSuf}`,
+        `ATR${(ind.atr14 / price * 100).toFixed(2)}%`,
+        `EMA20${emaArrow}${Math.abs(ema20Dev).toFixed(2)}%`,
+        volStr,
+      ];
+      if (bbStr) parts.push(bbStr);
+      if (macdStr) parts.push(macdStr);
+      if (tf === '1d') parts.push(`EMA50${emaArrow}${Math.abs(ema50Dev).toFixed(2)}%`);
+      const chgStr = (chg >= 0 ? '+' : '') + chg.toFixed(1) + '%';
+      tfOut.push(`${tf}:${chgStr} ${parts.join(' ')}`);
     }
-    // 多周期共振判断
-    const bullish = tfSignals.filter(s => s.direction === "看涨" || s.direction === "偏涨").length;
-    const bearish = tfSignals.filter(s => s.direction === "看跌" || s.direction === "偏跌").length;
-    const total = tfSignals.length;
-    let alignment = "中性";
-    let alignIcon = "🟡";
-    if (total > 0) {
-      const pct = Math.max(bullish, bearish) / total;
-      if (pct >= 0.75) {
-        alignment = bullish > bearish ? "多头共振" : "空头共振";
-        alignIcon = bullish > bearish ? "🟢" : "🔴";
-      } else if (pct >= 0.5) {
-        alignment = bullish > bearish ? "偏多" : "偏空";
-        alignIcon = bullish > bearish ? "🟢" : "🔴";
-      } else {
-        alignment = "多空矛盾";
-        alignIcon = "🟡";
-      }
+    const fr = t.fundingRate ?? 0;
+    const frSentiment = fr > 0.005 ? '多拥挤' : fr < -0.005 ? '空拥挤' : '中性';
+    coinLines.push(`【${sym}】$${t.price?.toFixed(t.price>100?0:4)} | 24h:${t.change24h?.toFixed(2)}% | 费率:${(fr).toFixed(4)}%(${frSentiment})`);
+    if (tfOut.length > 0) {
+      for (const line of tfOut) coinLines.push(`  ${line}`);
+    } else {
+      coinLines.push(`  数据不足`);
     }
-    const tfLine = tfSignals.map(s =>
-      `${s.tf}:${s.direction}(${s.strength})变化${s.change}%`
-    ).join(" | ");
-    coinLines.push(`【${sym}】$${t.price?.toFixed(t.price>100?0:4)} | 24h:${t.change24h?.toFixed(2)}% | 费率:${(t.fundingRate || 0).toFixed(4)}% | ${alignIcon}${alignment}`);
-    if (tfLine) coinLines.push(`  ${tfLine}`);
     coinLines.push("");
   }
 
@@ -160,41 +176,54 @@ ${historyLines || "无历史数据"}
 ${decLines ? "\n" + decLines : ""}
 
 ## 🔍 复盘反省（必须做）
-你的历史战绩显示总亏损$${stats && stats.totalPnl < 0 ? Math.abs(stats.totalPnl).toFixed(2) : "0"}。请针对每笔亏损分析：
-- 开仓时你的判断依据是什么？结果证明哪里错了？
-- 是方向看反了，还是进场时机不对，还是止损设太宽？
-- 当前市场状态和上周比有变化吗？你的策略是否需要调整？
+你的历史战绩显示总盈亏${(stats && stats.totalPnl) ? `${stats.totalPnl >= 0 ? '+' : ''}$${stats.totalPnl.toFixed(2)}` : "$0"}。请分析：
+- **近期亏损单的共同特征是什么**？方向？入场时机？止损位置？
+- 当前市场状态和之前比有变化吗？你的策略是否需要调整？
 - **多空平等**，不要死扛一个方向
+- 你对持仓管理的判断准确吗？该平没平还是不该平平早了？
 
 ## 你的任务（不是描述行情，而是做交易决策）
-1. 对各币种给出评分 -10~+10 和操作建议
+你拿到了每个币种5个时间框架(1m/5m/15m/1h/1d)的完整指标：
+- **ADX**: 趋势强度，*号=极强趋势(≥75)，~号=弱趋势/震荡(<25)
+- **RSI**: 超买超卖，!号=极端值(≤30或≥70)
+- **ATR%**: 波动率，止损设ATR的1.5-2倍
+- **EMA20↑↓X%**: 价格相对EMA20的偏离，↑=在上方(偏多)，↓=在下方(偏空)
+- **量**: 最新成交量相对均量，缩=缩量，放量↑/↓=放量涨/跌（确认信号）
+- **BB上/下(%)**: 价格在Bollinger Band中的位置
+- **MACD**: 金叉/死叉/顶背离/底背离（仅1h和1d）
+- **费率**: (+)多拥挤=多军在付钱(-)空拥挤=空军在付钱，极端值预示反转
+
+分析要求：
+1. **多周期交叉验证** — 哪些周期方向一致（共振）？哪些矛盾？哪个更可信？
+   - 日线强趋势但小周期已转向 → 可能趋势衰竭，谨慎追单
+   - 小周期放量突破+大周期支持 → 真突破概率高
+   - 日线触及BB下轨+RSI超卖 → 反弹风险高
 2. **持仓管理是第一优先级**：
    - 盈利收窄（峰值回吐超过一半）→ close 锁定利润
    - 持仓亏损且无反转信号 → close 止损离场，不要一直 hold
    - 趋势衰竭（ADX回落/RSI极端/量能萎缩）→ 主动平仓，不分方向
-   - 每轮至少给出 1-2 个平仓建议，不要全部 hold
+   - **每轮必须给出至少 1-2 个平仓建议**，不要全部 hold
 3. 再找新机会：buy(做多)/sell(做空)/hold(不做)
-4. 需要你超越技术指标的地方：
-   - 哪些信号是**真突破**，哪些是**假动作**？
-   - 各时间框架之间是**共振**还是**矛盾**？哪个更可信？
-   - 当前**资金费率**和**波动率**告诉你了什么信息？
-   - 哪些币种在**领涨/领跌**？资金在**轮动**吗？
-   - **风险回报比**如何？值不值得入场？
+4. 你的评分 -10~+10 要体现：
+   - 多周期共振情况
+   - 量价配合程度
+   - 风险回报比
+   - 与当前市场主方向的偏离
 5. 每轮要体现你作为交易员的**思考过程**，不要只输出数据
 
 ## JSON 格式
 {
   "analysis": [
-    {"symbol":"BTC/USDT","analysis_1m":"放量突破前高，真突破概率大","analysis_5m":"MA多头排列，但RSI超买","analysis_15m":"上升通道健康","analysis_1h":"接近阻力位，注意回调","analysis_1d":"宽幅震荡，未突破","trend":"bullish","strength":"moderate","keyLevels":"支撑74000 阻力78000","summary":"短线动量足但接近阻力，谨慎看多","score":6}
+    {"symbol":"BTC/USDT","analysis_1m":"ADX65 RSI42 放量跌，空头主导","analysis_5m":"ADX72 RSI38 量平，空头延续","analysis_15m":"ADX68 RSI35 缩量，下跌动能减弱","analysis_1h":"ADX80 RSI32 触及BB下轨，趋势极强但超卖","analysis_1d":"ADX75 RSI29 超卖区，回调风险高","trend":"bearish","strength":"strong","keyLevels":"支撑64500 阻力67500","summary":"日线强空但RSI超卖+BB下轨，短线有反弹可能，追空风险大，等反弹再空","score":-5}
   ],
   "positions": [
-    {"symbol":"SUI/USDT","action":"hold","reason":"趋势完好但量能减弱，盯紧止损","confidence":0.7},
-    {"symbol":"DOGE/USDT","action":"close","reason":"反弹测试阻力但空头未变，降风险","confidence":0.65}
+    {"symbol":"SUI/USDT","action":"hold","reason":"浮亏但日线ADX65仍在空头，收紧止损观察","confidence":0.65},
+    {"symbol":"DOGE/USDT","action":"close","reason":"15m/1h方向矛盾，缩量反弹后可能转跌，先平仓观察","confidence":0.7}
   ],
   "newTrades": [
-    {"action":"sell","symbol":"SUI/USDT","leverage":5,"amountPercent":15,"reason":"空头共振，日线趋势强，追空","confidence":0.8}
+    {"action":"sell","symbol":"AAVE/USDT","leverage":3,"amountPercent":10,"reason":"日线空+1h放量跌+费率中性，等1h反弹EMA20再空","confidence":0.7}
   ],
-  "summary": "【决策】暂不开新仓，持有ETH/SOL观察 | 理由：整体偏空但短线有反弹动能，等待日线确认"
+  "summary": "【决策】整体偏空但多个币种RSI进入超卖区，追空风险增大。持仓3个继续hold观察，DOGE量能不足准备平仓。新仓等反弹再入，不追。"
 }`;
 }
 

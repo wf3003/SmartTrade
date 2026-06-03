@@ -5,12 +5,29 @@ import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { openai } from "./ai-client";
 
+export function buildDecisionAnalysis(decisions: any[]): string {
+  if (!decisions || decisions.length === 0) return "";
+  const recent = decisions.filter(d => d.raw_response).slice(-20);
+  const lines = recent.map((d: any) => {
+    try {
+      const raw = JSON.parse(d.raw_response);
+      const aiScore = raw.aiScore ?? "?";
+      const aiReason = (raw.aiReason || "").slice(0, 80);
+      return `${d.symbol} ${d.action} | AI评分:${aiScore} | ${aiReason} | 状态:${d.status}`;
+    } catch {
+      return `${d.symbol} ${d.action} | ${(d.reason||"").slice(0, 80)} | 状态:${d.status}`;
+    }
+  });
+  return `【AI决策历史（最近${lines.length}条）】\n${lines.join("\n")}`;
+}
+
 export async function aiTradeReview(
   tradeSummary: string,
   symbolStats: string,
   strategyConfig: string,
   openPositions: string = "",
   backtestLog: string = "",
+  decisionAnalysis: string = "",
 ): Promise<string> {
   if (!tradeSummary) return "";
 
@@ -24,9 +41,13 @@ ${backtestLog}
 
 ` : "";
 
+  const decSection = decisionAnalysis ? `${decisionAnalysis}
+
+` : "";
+
   const prompt = `你是一个加密货币交易策略分析师。以下是系统的近期交易记录和策略配置。
 
-${posSection}${btSection}【策略配置】
+${posSection}${btSection}${decSection}【策略配置】
 ${strategyConfig}
 
 【逐笔交易明细】
@@ -43,7 +64,8 @@ ${symbolStats}
   "bySymbol": [{"symbol":"BTC/USDT","analysis":"表现分析"}],
   "suggestions": ["具体优化建议"],
   "blockSignals": "哪些信号需要降分？为什么？(只降分不禁止)",
-  "blockSymbols": ["BCH/USDT", "SUI/USDT"]
+  "blockSymbols": ["BCH/USDT", "SUI/USDT"],
+  "scoringAdvice": "基于AI决策历史，哪些类型的市场环境AI评分偏高/偏低？应该怎么校准？(如:日线强空+小周期RSI超卖时AI追空评分应降低20)"
 }`;
 
   try {

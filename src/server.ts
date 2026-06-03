@@ -8,7 +8,7 @@ import { logger } from "./logger";
 import { db, getTradesToday, getDecisionsToday, getDecisionsHistory, getTradesHistory, getTradeStats, syncExchangeOrders, getExchangeOrders, getRecentAiReviews } from "./db";
 import { exchangeManager } from "./exchanges";
 import { latestReport, cachedPositions, cachedAccount } from "./state";
-import { getDirectionPauseInfo } from "./index";
+
 
 let _app: express.Express | null = null;
 let cycleStartTime = new Date().toISOString();
@@ -91,7 +91,7 @@ export async function startServer(host?: string, port?: number) {
           takeProfitUsdt: CONFIG.accountTakeProfitUsdt,
           initialBalance: CONFIG.initialBalance,
         },
-        directionPause: getDirectionPauseInfo(),
+        directionPause: {},
         reviews: getRecentAiReviews(10),
       });
     } catch (e: any) {

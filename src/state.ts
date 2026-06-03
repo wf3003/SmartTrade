@@ -2,6 +2,7 @@
  * SmartTrade - 共享状态
  */
 import { logger } from "./logger";
+import { CONFIG } from "./config";
 export let latestReport: any = null;
 export function setLatestReport(report: any) {
   latestReport = report;
@@ -44,6 +45,9 @@ export let stopLossMult = 1.0;
 /** 入场置信度下限偏移 (默认0，AI建议更确定时提高) */
 export let confidenceOffset = 0;
 
+/** AI复盘评分校准建议（给AI决策参考） */
+export let scoringAdvice = "";
+
 /** 重置所有动态参数到默认值 */
 export function resetDynamicParams() {
   symbolScoreMult.clear();
@@ -54,30 +58,45 @@ export function resetDynamicParams() {
   logger.info(`⚙️ 动态参数已重置为默认值`);
 }
 
-/** 应用 AI 复盘建议 — 翻译为参数调整 */
+/** 应用 AI 复盘建议 — 翻译为参数调整（正则匹配，支持提取数值） */
 export function applyReviewSuggestions(suggestions: string[]): void {
   for (const s of suggestions) {
-    if (s.includes("降低杠杆") || s.includes("杠杆上限") || s.includes("减少杠杆")) {
+    // ===== 杠杆 =====
+    // 提取具体倍数的模式：降至3x、降到2倍、杠杆调低到4
+    const levNumMatch = s.match(/杠杆.*?(?:降至|降到|调至|调到|下调到|降低到|设定为|设为)\s*(\d+)\s*[倍xX]?/);
+    if (levNumMatch) {
+      const target = parseInt(levNumMatch[1]);
+      leverageMult = Math.max(0.3, Math.min(1.5, target / CONFIG.defaultLeverage));
+      logger.info(`⚙️ 复盘→杠杆调至${target}x: leverageMult=${leverageMult.toFixed(2)}`);
+    } else if (/(降低|减少|下调|调低|减小)\s*(杠杆|倍数)/.test(s)) {
       leverageMult = Math.max(0.5, leverageMult - 0.15);
       logger.info(`⚙️ 复盘→降低杠杆: leverageMult=${leverageMult.toFixed(2)}`);
-    }
-    if (s.includes("增加杠杆") || s.includes("提高杠杆") || s.includes("杠杆过低")) {
+    } else if (/(提高|增加|上调|调高|加大)\s*(杠杆|倍数)/.test(s) || /杠杆过低/.test(s)) {
       leverageMult = Math.min(1.5, leverageMult + 0.15);
       logger.info(`⚙️ 复盘→提高杠杆: leverageMult=${leverageMult.toFixed(2)}`);
     }
-    if (s.includes("放宽止损")) {
+
+    // ===== 止损 =====
+    // 提取具体百分比：收窄至4%、止损设到5%
+    const slNumMatch = s.match(/止损.*?(?:收窄至|收紧至|缩小到|设置为|设为|调到|放宽到|放大到|扩大到|扩大到|扩大至)\s*(\d+)\s*%/);
+    if (slNumMatch) {
+      const target = parseInt(slNumMatch[1]) / 100;
+      stopLossMult = Math.max(0.5, Math.min(1.5, target / 8));
+      logger.info(`⚙️ 复盘→止损调至${parseInt(slNumMatch[1])}%: stopLossMult=${stopLossMult.toFixed(2)}`);
+    } else if (/(收紧|收窄|缩小|减小|过[大宽])\s*(止损|止蚀)/.test(s)) {
+      stopLossMult = Math.max(0.5, stopLossMult - 0.1);
+      logger.info(`⚙️ 复盘→收紧止损: stopLossMult=${stopLossMult.toFixed(2)}`);
+    } else if (/(放宽|放大|扩大|拉宽|增加|提高|过[窄小])\s*(止损|止蚀)/.test(s)) {
       stopLossMult = Math.min(1.5, stopLossMult + 0.2);
       logger.info(`⚙️ 复盘→放宽止损: stopLossMult=${stopLossMult.toFixed(2)}`);
     }
-    if (s.includes("收紧止损") || s.includes("缩小止损") || s.includes("止损过大")) {
-      stopLossMult = Math.max(0.8, stopLossMult - 0.1);
-      logger.info(`⚙️ 复盘→收紧止损: stopLossMult=${stopLossMult.toFixed(2)}`);
-    }
-    if ((s.includes("提高") || s.includes("增加")) && (s.includes("信心") || s.includes("阈值"))) {
+
+    // ===== 信心阈值 =====
+    if (/(提高|提升|上调|增加|抬高)\s*[^。]*(?:信心|阈值|门槛|置信度|入场要求)/.test(s)) {
       confidenceOffset = Math.min(0.15, confidenceOffset + 0.05);
       logger.info(`⚙️ 复盘→提高信心阈值: confidenceOffset=${confidenceOffset.toFixed(2)}`);
     }
-    if ((s.includes("降低") || s.includes("减少")) && (s.includes("信心") || s.includes("阈值"))) {
+    if (/(降低|减少|下调|减低|放宽)\s*[^。]*(?:信心|阈值|门槛|置信度|入场要求)/.test(s)) {
       confidenceOffset = Math.max(0, confidenceOffset - 0.05);
       logger.info(`⚙️ 复盘→降低信心阈值: confidenceOffset=${confidenceOffset.toFixed(2)}`);
     }
@@ -193,6 +212,7 @@ export async function saveFeedbackToDb(extra?: Record<string, any>): Promise<voi
     leverageMult,
     stopLossMult,
     confidenceOffset,
+    scoringAdvice,
   });
   saveFeedbackState(payload);
 }
@@ -208,6 +228,7 @@ export async function loadFeedbackFromDb(): Promise<void> {
     if (typeof data.leverageMult === "number") leverageMult = data.leverageMult;
     if (typeof data.stopLossMult === "number") stopLossMult = data.stopLossMult;
     if (typeof data.confidenceOffset === "number") confidenceOffset = data.confidenceOffset;
+    if (typeof data.scoringAdvice === "string" && data.scoringAdvice) scoringAdvice = data.scoringAdvice;
     logger.info(`⚙️ 已恢复复盘反馈参数: leverageMult=${leverageMult.toFixed(2)} stopLossMult=${stopLossMult.toFixed(2)} symbolScoreMult=${symbolScoreMult.size}项`);
   } catch {}
 }

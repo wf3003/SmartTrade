@@ -4,6 +4,7 @@
  */
 import { CONFIG } from "./config";
 import { openai } from "./ai-client";
+import { scoringAdvice } from "./state";
 
 export interface AiOpinion {
   score: number;
@@ -52,7 +53,10 @@ ${signalLines}
 【实时回测评估】
 ${backtestData || "无回测数据"}
 
-你的任务（输出 JSON）：
+${scoringAdvice ? `【评分校准建议（基于近期复盘）】
+${scoringAdvice}
+
+` : ""}你的任务（输出 JSON）：
 1. 对每个策略信号，给出 score 0-100 表示支持度：
    - 0-30: 不认同，跳过
    - 30-50: 认同但谨慎，建议轻仓

@@ -107,9 +107,8 @@ export function checkProfitProtect(
 }
 
 /**
- * 检查是否触发止损（ATR 动态止损）
- * 止损距离 = 1.5 × ATR% × 杠杆，限制在 5%~10% 之间
- * 强趋势中正常回调幅度大，需要更宽的止损容忍度
+ * 检查是否触发止损（ATR 动态止损，与 strategy.ts 一致）
+ * 止损距离 = 2 × ATR%，限制在 2%~8% 之间，只跟波动率有关
  */
 export function checkStopLoss(
   currentPnlPct: number,
@@ -117,10 +116,9 @@ export function checkStopLoss(
   leverage: number = 5,
   atrPct: number = 0.015
 ): StopLossResult | null {
-  const atrStopPct = Math.round(atrPct * 1.5 * leverage * 100 * 10) / 10;
-  const stopThreshold = Math.max(Math.min(atrStopPct, 10), 5);
+  const stopThreshold = Math.max(2, Math.min(8, atrPct * 100 * 2));
   if (currentPnlPct <= -stopThreshold) {
-    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × 1.5 × ${leverage}x = ${stopThreshold.toFixed(0)}%)` };
+    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × 2 = ${stopThreshold.toFixed(0)}%)` };
   }
   return null;
 }

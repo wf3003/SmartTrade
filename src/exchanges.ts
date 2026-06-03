@@ -205,14 +205,14 @@ class ExchangeManager {
    * 获取多时间框架 OHLCV 数据（用于 AI 分析）
    */
   async getOHLCV(symbol: string, timeframe: string, limit: number = 15): Promise<{
-    timeframe: string; candles: { open: number; high: number; low: number; close: number; }[]
+    timeframe: string; candles: { open: number; high: number; low: number; close: number; volume: number; }[]
   } | null> {
     const found = this.findSwapClient(symbol);
     if (!found) return null;
     try {
       const raw = await found.client.fetchOHLCV(found.swapSymbol, timeframe, undefined, limit);
       const candles = raw.map((c: any) => ({
-        open: c[1], high: c[2], low: c[3], close: c[4],
+        open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5] ?? 0,
       }));
       return { timeframe, candles };
     } catch {
@@ -223,7 +223,7 @@ class ExchangeManager {
   /**
    * 批量获取多时间框架数据
    */
-  async getMultiTimeframeData(symbol: string): Promise<Record<string, { open: number; high: number; low: number; close: number; }[]>> {
+  async getMultiTimeframeData(symbol: string): Promise<Record<string, { open: number; high: number; low: number; close: number; volume: number; }[]>> {
     const frames = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
     const results: Record<string, any> = {};
     for (const tf of frames) {

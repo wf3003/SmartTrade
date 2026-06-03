@@ -15,7 +15,7 @@ import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, g
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
-import { aiTradeReview, buildTradeSummary, buildSymbolStats } from "./ai-review";
+import { aiTradeReview, buildTradeSummary, buildSymbolStats, buildDecisionAnalysis } from "./ai-review";
 import { 
   db, 
   getOpenPositions,
@@ -49,13 +49,6 @@ const stopCooldown = new Map<string, number>();
 const consecutiveStopCount = new Map<string, number>();
 // 止损后暂停该币种交易的最小分钟数
 const STOP_COOLDOWN_MINUTES = 30;
-// 方向暂停：最近3笔做多/做空盈亏滚动窗口（方向连续性自检）
-const longPnlBuf: number[] = [];
-const shortPnlBuf: number[] = [];
-let longPaused = false;
-let shortPaused = false;
-let dualFrozenUntil = 0;
-let longPauseUntil = 0;
 let shortPauseUntil = 0;
 // 连续止损计数按天衰减：超过24h未新止损则计数减1
 function decayStopCount(symbol: string): void {
@@ -161,41 +154,6 @@ async function executeFullClose(
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
   setTimeout(() => _recentlyClosed.delete(symbol), 30000);
-  // 【优化】方向暂停：更新滚动窗口
-  if (side === "long" || side === "short") {
-    const dirBuf = side === "long" ? longPnlBuf : shortPnlBuf;
-    dirBuf.push(actualPnlPct > 0 ? 1 : 0);
-    if (dirBuf.length > 3) dirBuf.shift();
-    if (actualPnlPct > 0) {
-      if (side === "long") { longPaused = false; longPauseUntil = 0; }
-      else { shortPaused = false; shortPauseUntil = 0; }
-    } else if (dirBuf.length >= 2 && dirBuf.filter(v => v === 0).length >= 2) {
-      if (side === "long") { longPaused = true; longPauseUntil = Date.now() + 30 * 60 * 1000; }
-      else { shortPaused = true; shortPauseUntil = Date.now() + 30 * 60 * 1000; }
-    }
-    // 单向超时自动恢复
-    if (longPaused && longPauseUntil > 0 && Date.now() >= longPauseUntil) {
-      longPaused = false; longPauseUntil = 0; longPnlBuf.length = 0;
-      logger.info(`🔓 做多暂停到期,恢复做多`);
-    }
-    if (shortPaused && shortPauseUntil > 0 && Date.now() >= shortPauseUntil) {
-      shortPaused = false; shortPauseUntil = 0; shortPnlBuf.length = 0;
-      logger.info(`🔓 做空暂停到期,恢复做空`);
-    }
-    // 双向冻结
-    if (longPaused && shortPaused && dualFrozenUntil === 0) {
-      dualFrozenUntil = Date.now() + 30 * 60 * 1000;
-      const freezeMins = Math.ceil((dualFrozenUntil - Date.now()) / 60000);
-      logger.warn(`🔒 双向方向暂停, 冻结${freezeMins}分钟, 解冻:${new Date(dualFrozenUntil).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai'})}`);
-    }
-    if (dualFrozenUntil > 0 && Date.now() >= dualFrozenUntil) {
-      longPaused = false; shortPaused = false;
-      longPnlBuf.length = 0; shortPnlBuf.length = 0;
-      longPauseUntil = 0; shortPauseUntil = 0;
-      dualFrozenUntil = 0;
-      logger.info(`🔓 冻结到期, 方向计数重置`);
-    }
-  }
   return { closeResult, actualPnl, actualPnlPct };
 }
 
@@ -288,16 +246,6 @@ async function executeFullOpen(
 }
 
 // 导出方向暂停状态供网页仪表盘显示
-export function getDirectionPauseInfo() {
-  return {
-    longPaused,
-    shortPaused,
-    dualFrozen: dualFrozenUntil > Date.now(),
-    longRemainMin: longPauseUntil > 0 ? Math.max(0, Math.ceil((longPauseUntil - Date.now()) / 60000)) : 0,
-    shortRemainMin: shortPauseUntil > 0 ? Math.max(0, Math.ceil((shortPauseUntil - Date.now()) / 60000)) : 0,
-    dualRemainMin: dualFrozenUntil > 0 ? Math.max(0, Math.ceil((dualFrozenUntil - Date.now()) / 60000)) : 0,
-  };
-}
 
 // 全局未捕获异常处理（防止决策超时等导致进程崩溃）
 process.on("unhandledRejection", (reason) => {
@@ -588,22 +536,6 @@ async function monitorPositions() {
       setCacheData(account, positions);
       lastSnapshotTime = now;
     }
-  // 【优化】方向暂停超时检查（监控循环每2秒，恢复更快）
-  if (longPaused && longPauseUntil > 0 && Date.now() >= longPauseUntil) {
-    longPaused = false; longPauseUntil = 0; longPnlBuf.length = 0;
-    logger.info(`🔓 做多暂停到期(监控循环),恢复做多`);
-  }
-  if (shortPaused && shortPauseUntil > 0 && Date.now() >= shortPauseUntil) {
-    shortPaused = false; shortPauseUntil = 0; shortPnlBuf.length = 0;
-    logger.info(`🔓 做空暂停到期(监控循环),恢复做空`);
-  }
-  if (dualFrozenUntil > 0 && Date.now() >= dualFrozenUntil) {
-    longPaused = false; shortPaused = false;
-    longPnlBuf.length = 0; shortPnlBuf.length = 0;
-    longPauseUntil = 0; shortPauseUntil = 0;
-    dualFrozenUntil = 0;
-    logger.info(`🔓 双向冻结到期(监控循环),方向计数重置`);
-  }
   } catch (e: any) {
     logger.error(`监控异常: ${e.message}`);
   }
@@ -705,21 +637,7 @@ async function aiDecisionCycle() {
       if (aiResult.positions.length > 0) {
         (report as any).aiPositions = aiResult.positions;
       }
-      // AI 市场偏向覆盖硬编码修正
-      if (aiResult.marketBias) {
-        logger.info(`🤖 AI market_bias: ${aiResult.marketBias}`);
-        if (aiResult.marketBias !== "balanced") {
-          for (const t of report.newTrades) {
-            if (t.action === "hold") continue;
-            const isReverse = (t.action === "buy" && aiResult.marketBias === "bearish")
-              || (t.action === "sell" && aiResult.marketBias === "bullish");
-            if (isReverse) {
-              t.confidence = Math.max(0.3, (t.confidence || 0) - 0.15);
-              t.score = Math.round((t.score || 0) * 0.7);
-            }
-          }
-        }
-      }
+      // 市场偏向修正已移除（AI自行判断）
     }
 
     // 5. 合并策略引擎 + AI 持仓管理指令，去重执行
@@ -812,7 +730,6 @@ async function aiDecisionCycle() {
       let openedThisCycle = MAX_NEW_PER_CYCLE; // 直接跳过
       if (!(report as any).tradeResults) (report as any).tradeResults = [];
       for (const trade of report.newTrades) {
-        if (trade.action === "hold") continue;
         (report as any).tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "启动保护中" });
       }
     } else if (report.newTrades && report.newTrades.length > 0) {
@@ -828,7 +745,6 @@ async function aiDecisionCycle() {
         execLog.push(`风控阻止: ${reason}`);
         // 记录被风控跳过的新开仓尝试
         for (const trade of report.newTrades) {
-          if (trade.action === "hold") continue;
           const skipId = insertDecision({
             time: new Date().toISOString(), ai_model: CONFIG.ai.model,
             signal: trade.action, symbol: trade.symbol, action: trade.action,
@@ -848,56 +764,7 @@ async function aiDecisionCycle() {
       const tradeResults: any[] = (report as any).tradeResults = [];
       for (const trade of report.newTrades) {
         if (openedThisCycle >= MAX_NEW_PER_CYCLE) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "每周期开仓已达上限" }); logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
-        if (trade.action === "hold") continue;
-        const regime = (trade as any).regime || "";
-        const regimeThreshold = regime.startsWith("强趋势") ? 0.35 : regime.startsWith("弱趋势") ? 0.40 : regime.includes("震荡") ? 0.55 : 0.80;
-        // 【优化】方向暂停&超时检查
-        if (longPaused && longPauseUntil > 0 && Date.now() >= longPauseUntil) {
-          longPaused = false; longPauseUntil = 0; longPnlBuf.length = 0;
-          logger.info(`🔓 做多暂停到期(决策循环),恢复做多`);
-        }
-        if (shortPaused && shortPauseUntil > 0 && Date.now() >= shortPauseUntil) {
-          shortPaused = false; shortPauseUntil = 0; shortPnlBuf.length = 0;
-          logger.info(`🔓 做空暂停到期(决策循环),恢复做空`);
-        }
-        if (dualFrozenUntil > 0 && Date.now() >= dualFrozenUntil) {
-          longPaused = false; shortPaused = false;
-          longPnlBuf.length = 0; shortPnlBuf.length = 0;
-          longPauseUntil = 0; shortPauseUntil = 0;
-          dualFrozenUntil = 0;
-          logger.info(`🔓 双向冻结到期(决策循环),方向计数重置`);
-        }
-        const tradeDir = trade.action === "buy" ? "long" : "short";
-        if (dualFrozenUntil > Date.now()) {
-          const remain = Math.ceil((dualFrozenUntil - Date.now()) / 60000);
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `双向冻结,剩${remain}分钟` });
-          logger.info(`⏸️ ${trade.symbol} 双向冻结,${remain}分钟后解冻`);
-          execLog.push(`frozen:${trade.symbol}`);
-          continue;
-        }
-        if ((tradeDir === "long" && longPaused) || (tradeDir === "short" && shortPaused)) {
-          const until = tradeDir === "long" ? longPauseUntil : shortPauseUntil;
-          const remain = until > 0 ? Math.ceil((until - Date.now()) / 60000) : '?';
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `方向暂停${tradeDir},剩${remain}分` });
-          logger.info(`⏸️ ${trade.symbol} 方向暂停${tradeDir},${remain}分钟后解冻`);
-          execLog.push(`dirPause:${trade.symbol}`);
-          continue;
-        }
-        if ((trade.confidence || 0) < regimeThreshold) { 
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `信心度不足(${((trade.confidence||0)*100).toFixed(0)}%<${(regimeThreshold*100).toFixed(0)}%)` });
-          const msg = `⏭️ ${trade.symbol} 信心度${((trade.confidence||0)*100).toFixed(0)}% < ${(regimeThreshold*100).toFixed(0)}%(${regime||"-"}) 跳过`;
-          logger.info(msg);
-          execLog.push(msg);
-          const skipId = insertDecision({
-            time: new Date().toISOString(), ai_model: CONFIG.ai.model,
-            signal: trade.action, symbol: trade.symbol, action: trade.action,
-            leverage: trade.leverage, amount: trade.amountPercent,
-            reason: trade.reason, confidence: trade.confidence,
-            raw_response: JSON.stringify(trade),
-          });
-          updateDecisionStatus(skipId, "skipped");
-          continue; 
-        }
+        // 方向由AI决定，strategy仅给出参考方向
         if (existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "已有持仓" }); logger.info(`已有 ${trade.symbol} 持仓，跳过`); continue; }
         if (existingSymbols.size >= CONFIG.maxPositions) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
         // 止损冷却检查：递增惩罚
@@ -959,15 +826,18 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} 综合行情质量${finalMq}，仓位降至${trade.amountPercent}%`);
         }
 
+        const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "无AI分析";
+        const aiSc = aiResult?.signals.get(trade.symbol)?.score ?? 0;
         logger.warn(`🤖 AI 开仓: ${trade.action} ${trade.symbol} | ${trade.leverage}x | ${trade.amountPercent}%`);
-        logger.info(`   理由: ${trade.reason}`);
+        logger.info(`   AI评分:${aiSc} ${aiRsn}`);
+        logger.info(`   策略指标: ${trade.reason}`);
 
         const decId = insertDecision({
           time: new Date().toISOString(), ai_model: CONFIG.ai.model,
           signal: trade.action, symbol: trade.symbol, action: trade.action,
           leverage: trade.leverage, amount: trade.amountPercent,
-          reason: trade.reason, confidence: trade.confidence,
-          raw_response: JSON.stringify(trade),
+          reason: `AI:${aiSc}分 ${aiRsn}`, confidence: trade.confidence,
+          raw_response: JSON.stringify({ trade, aiScore: aiSc, aiReason: aiRsn }),
         });
 
         const side = trade.action === "buy" ? "long" : "short";
@@ -1000,12 +870,7 @@ async function aiDecisionCycle() {
     }
     if (execLog.length > 0 && report.execution) report.execution.log = execLog;
 
-    if (report.analysis?.length) {
-      const top = report.analysis.filter(a => Math.abs(a.score) >= 6).slice(0, 3);
-      for (const a of top) {
-        logger.info(`  📊 ${a.symbol}: ${a.trend}(${a.strength}) score:${a.score} — ${a.summary?.slice(0, 60)}`);
-      }
-    }
+    // 策略评分已移除，分析日志改为展示AI方向复核摘要
 
     // 6. AI 交易复盘（每 6 周期≈30 分钟一次，独立定时器，不阻塞决策循环）
     scheduleReview(aiCycleNumber);
@@ -1031,11 +896,14 @@ async function scheduleReview(currentCycle: number) {
         }).join("\n")
       : "无持仓";
     const openSummary = `当前${cachedPositions.length}个持仓:\n${posLines}`;
-    const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:5-10% 跟踪:0.8%/0.4%→2%/0.3%`;
+    const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:2-8%(ATR×2) 浮盈保护:阶梯回撤`;
     logger.info(`📊 AI 复盘(周期#${currentCycle})开始调用...`);
     const btLogs = db.prepare("SELECT symbol, optimal_strategy, confidence, best_tf FROM backtest_logs WHERE time > datetime('now', '-1 hour') ORDER BY id DESC LIMIT 50").all() as any[];
     const btSummary = btLogs.length > 0 ? btLogs.map((l: any) => `${l.symbol}: ${l.optimal_strategy}(cf${l.confidence}% ${l.best_tf})`).join("\n") : "";
-    const review = await aiTradeReview(tradeSummary, symbolStats, configStr, openSummary, btSummary);
+    // 获取近期AI决策历史（含AI评分和理由）
+    const recentDecisions = (db.prepare("SELECT symbol, action, reason, status, raw_response FROM decisions WHERE raw_response IS NOT NULL AND raw_response != '' AND time > datetime('now', '-2 hours') ORDER BY id DESC LIMIT 20").all() as any[]) as any[];
+    const decAnalysis = buildDecisionAnalysis(recentDecisions);
+    const review = await aiTradeReview(tradeSummary, symbolStats, configStr, openSummary, btSummary, decAnalysis);
     if (review && review.length > 10) {
       logger.info(`📊 AI 交易复盘(周期#${currentCycle}):\n${review}`);
       // 解析复盘结果，将 AI 建议回馈到策略引擎参数
@@ -1057,6 +925,12 @@ async function scheduleReview(currentCycle: number) {
         // 3. 全局建议 → 调整杠杆/止损/置信度
         if (Array.isArray(parsed.suggestions)) {
           applyReviewSuggestions(parsed.suggestions);
+        }
+        // 4. AI评分校准建议 → 存入状态供下次决策参考
+        if (parsed.scoringAdvice && typeof parsed.scoringAdvice === "string") {
+          const state = await import("./state");
+          state.scoringAdvice = parsed.scoringAdvice;
+          logger.info(`⚙️ 复盘→AI评分校准: ${parsed.scoringAdvice.slice(0, 80)}${parsed.scoringAdvice.length > 80 ? "..." : ""}`);
         }
         logger.info(`📊 复盘反馈已应用完成`);
         // 持久化到数据库，防止进程重启丢失

@@ -169,9 +169,9 @@ function calcADX(high: number[], low: number[], close: number[], p: number): num
 
 // ========== K线格式转换 ==========
 
-/** {open,high,low,close}[] → ccxt 标准 number[][] */
-export function convertCandles(d: { open: number; high: number; low: number; close: number }[]): number[][] {
-  return d.map(x => [0, x.open, x.high, x.low, x.close, 0]);
+/** {open,high,low,close,volume}[] → ccxt 标准 number[][] */
+export function convertCandles(d: { open: number; high: number; low: number; close: number; volume?: number }[]): number[][] {
+  return d.map(x => [0, x.open, x.high, x.low, x.close, x.volume ?? 0]);
 }
 
 // ========== 数组版 EMA（返回完整序列）==========

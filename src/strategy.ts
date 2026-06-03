@@ -38,7 +38,7 @@ function classifyRegime(adx: number, dailyUp: boolean, price: number, ema20: num
 
 export async function generateStrategyReport(
   tickers: Map<string, MarketData>,
-  ohlcv: Map<string, Record<string, { open: number; high: number; low: number; close: number }[]>>,
+  ohlcv: Map<string, Record<string, { open: number; high: number; low: number; close: number; volume?: number }[]>>,
   positions: Position[],
   account: AccountInfo,
 ): Promise<StrategyReport | null> {
@@ -94,237 +94,61 @@ export async function generateStrategyReport(
     if (dailyAdx >= 40)      entryBand = Math.max(at * 1.2, 0.8);  // 强趋势：价格偏离大时也能入场
     else if (dailyAdx >= 25) entryBand = Math.max(at * 0.8, 0.6);  // 弱趋势
     else                     entryBand = Math.max(at * 0.6, 0.5);  // 震荡
-    let rl = "", sig: S = "hold", sc = 0, re = "", cf = 0;
-
-    if (regime === "纯震荡") {
-      rl = regime;
-      re = `ADX${dailyAdx.toFixed(0)}<18 纯震荡不交易`;
-    } else if (regime === "震荡偏多" || regime === "震荡偏空") {
-      rl = regime;
-      const hasPos = es.has(sym);
-      if (regime === "震荡偏空") {
-        // 震荡偏空——禁止做多，仅允许做空
-        if (hasPos) {
-          re = `震荡偏空/已有持仓持有中`;
-        } else if (maDist >= 0 && maDist <= entryBand) {
-          sc = -5 - Math.round(at * 3);
-          sig = "sell";
-          re = `震荡偏空/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
-          cf = 0.6;
-        } else if (maDist < -entryBand * 0.6) {
-          sc = -4 - Math.round(at * 2); sig = "sell"; re = `震荡偏空/追空(${maDist.toFixed(2)}%)`; cf = 0.45;
-        } else {
-          re = `震荡偏空/突破${entryMaName}观望`;
-        }
-      } else {
-        // 震荡偏多——禁止做空，仅允许做多
-        if (hasPos) {
-          re = `震荡偏多/已有持仓持有中`;
-        } else if (maDist >= -entryBand && maDist <= 0) {
-          sc = 5 + Math.round(at * 3);
-          sig = "buy";
-          re = `震荡偏多/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
-          cf = 0.6;
-        } else if (maDist > entryBand * 0.6) {
-          sc = 4 + Math.round(at * 2); sig = "buy"; re = `震荡偏多/追多(${maDist.toFixed(2)}%)`; cf = 0.45;
-        } else {
-          re = `震荡偏多/跌破${entryMaName}观望`;
-        }
-      }
-    } else if (regime.startsWith("强趋势") || regime.startsWith("弱趋势")) {
-      rl = regime;
-      const isUp = regime.includes("多");
-      const hasPos = es.has(sym);
-      // 1h 时间框架一致性检查
-      const h1Aligned = i1 && (isUp ? i1.ema20 > i1.ema50 : i1.ema20 < i1.ema50);
-      if (!h1Aligned && !hasPos) {
-        // 多空矛盾：日线多/1h空 或 日线空/1h多
-        // 日线 ADX ≥ 60 置信度高 → 顺日线方向开仓
-        if (dailyAdx >= 60 && isUp) {
-          if (maDist >= -entryBand && maDist <= 0) {
-            sc = Math.round((8 + Math.round(at * 5)) * 1.0);
-            sig = "buy";
-            re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/顺日线做多/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
-            cf = 0.7;
-          } else {
-            re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等回调`;
-          }
-        } else if (dailyAdx >= 60) {
-          if (maDist >= 0 && maDist <= entryBand) {
-            sc = Math.round((-8 - Math.round(at * 5)) * 1.0);
-            sig = "sell";
-            re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/顺日线做空/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
-            cf = 0.7;
-          } else {
-            re = `${regime}/日线ADX${dailyAdx.toFixed(0)}≥60/离${entryMaName}${Math.abs(maDist).toFixed(1)}%等反弹`;
-          }
-        } else {
-          // 日线弱趋势(ADX<60) + 方向矛盾 → 不交易，避免强多看跌之类的反直觉信号
-          re = `${regime}/日线ADX${dailyAdx.toFixed(0)}<60/1h方向矛盾，等待信号一致`;
-        }
-      } else if (isUp && !hasPos) {
-        // 做多：回踩入场需要价格在EMA下方（真正回踩），EMA上方是追多
-        if (maDist >= -entryBand && maDist <= 0) {
-          const isStrong = regime.startsWith("强趋势");
-          sc = Math.round((8 + Math.round(at * 5)) * (isStrong ? 1.0 : 0.65));
-          sig = "buy";
-          re = `${regime}/回踩${entryMaName}(${maDist.toFixed(2)}%)`;
-          cf = isStrong ? 0.85 : 0.7;
-        } else if (maDist > entryBand * 0.6) {
-          const isStrong = regime.startsWith("强趋势");
-          // 【优化】追多距离保护：偏离超过2×ATR且非极端趋势时拦截
-          const distAtRatio = Math.abs(maDist) / Math.max(at, 0.01);
-          if (distAtRatio > 2 && !isStrong && dailyAdx < 55) {
-            re = `${regime}/超涨${maDist.toFixed(1)}%(${distAtRatio.toFixed(0)}×ATR)禁止追多,等回调`;
-          } else if (maDist > 2 && dailyAdx < 60) {
-            re = `${regime}/偏离EMA${maDist.toFixed(2)}%等回调`;
-          } else {
-            const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
-            sc = 4 + Math.round(at * 2); sig = "buy"; re = `${regime}/追多(${maDist.toFixed(2)}%)`;
-            const baseCf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
-            cf = distAtRatio > 2 ? Math.max(0.25, baseCf - 0.15) : baseCf;
-            if (bt.optimalStrategy === "continuation" && bt.avgADX > 40) cf = Math.max(cf, 0.65);
-          }
-        } else {
-          re = `${regime}/跌破${entryMaName}观望`;
-        }
-      } else if (!isUp && !hasPos) {
-        // 做空：反弹入场需要价格在EMA上方（真正反弹），EMA下方是追空
-        if (maDist >= 0 && maDist <= entryBand) {
-          const isStrong = regime.startsWith("强趋势");
-          sc = Math.round((-8 - Math.round(at * 5)) * (isStrong ? 1.0 : 0.65));
-          sig = "sell";
-          re = `${regime}/反弹${entryMaName}(${maDist.toFixed(2)}%)`;
-          cf = isStrong ? 0.85 : 0.7;
-        } else if (maDist < -entryBand * 0.6) {
-          const isStrong = regime.startsWith("强趋势");
-          // 【优化】追空距离保护：偏离超过2×ATR且非极端趋势时拦截
-          const distAtRatio = Math.abs(maDist) / Math.max(at, 0.01);
-          if (distAtRatio > 2 && !isStrong && dailyAdx < 55) {
-            re = `${regime}/超跌${Math.abs(maDist).toFixed(1)}%(${distAtRatio.toFixed(0)}×ATR)禁止追空,等反弹`;
-          } else if (Math.abs(maDist) > 2 && dailyAdx < 60) {
-            re = `${regime}/偏离EMA${Math.abs(maDist).toFixed(2)}%等反弹`;
-          } else {
-            const chaseRatio = Math.abs(maDist) / Math.max(entryBand * 0.6, 0.01);
-            sc = -4 - Math.round(at * 2); sig = "sell"; re = `${regime}/追空(${maDist.toFixed(2)}%)`;
-            const baseCf = Math.max(0.3, (isStrong ? 0.55 : 0.45) - (chaseRatio - 1) * 0.10);
-            cf = distAtRatio > 2 ? Math.max(0.25, baseCf - 0.15) : baseCf;
-            if (bt.optimalStrategy === "continuation" && bt.avgADX > 40) cf = Math.max(cf, 0.65);
-          }
-        } else {
-          re = `${regime}/突破${entryMaName}观望`;
-        }
-      } else {
-        // TODO: 加仓功能 — 需先改DB为流水账模式(每条操作新增,不覆盖)
-        re = `${regime}/已有持仓持有中`;
-      }
-    } else {
-      rl = regime;
-      re = `已有持仓或等信号`;
-    }
-    // 超涨/超跌检查（在 a.push 前执行，确保 summary 正确显示）
-    if (sig !== "hold") {
-      // 回测判断为"延续"策略时，放宽超涨/超跌阈值，避免在强趋势中拦截顺势信号
-      const atrMult = bt.optimalStrategy === "continuation" ? 5 : 3;
-      const rsiLimit = bt.optimalStrategy === "continuation" ? 85 : 70;
-      if (bt.optimalStrategy === "continuation" && dailyAdx > 55) {
-        // ADX>55 极端趋势中 RSI 极端值无预测意义，不拦截，让趋势走完
-        logger.info(`[BT] ${sym}: ADX${dailyAdx.toFixed(0)}>55 极端趋势, 跳过超涨拦截`);
-      } else {
-        const extreme = checkExtremeDeviation(maDist, at, i1.rsi14, sig === "sell" ? "short" : "long", atrMult);
-        if (extreme.hit && (bt.optimalStrategy !== "continuation" || (sig === "buy" ? i1.rsi14 > rsiLimit : i1.rsi14 < 100 - rsiLimit))) {
-          sig = "hold"; sc = 0; cf = 0;
-          re = `${regime}/${extreme.label}风险(${extreme.detail})`;
-        }
-      }
-    }
+    // 取代旧评分逻辑：strategy 不再做方向判断，仅提供指标数据和执行参数
+    // AI（agent.ts）基于完整指标独立做方向决策
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
-    const td = regime === "纯震荡"
-      ? "纯震荡不开仓"
-      : `${regime}/回踩1h${entryMaName}`;
-    a.push({ symbol: sym, regime: rl, score: sc, trend: sig === "buy" ? "bullish" : sig === "sell" ? "bearish" : "neutral", strength: Math.abs(sc) >= 7 ? "strong" : Math.abs(sc) >= 4 ? "moderate" : "weak", keyLevels: kl, summary: re, analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: adxDesc(id.adx) });
-    if (sig === "hold" && re) {
-      logger.info(`[ST] ${sym}: ${regime} | score=${sc} sig=hold | ${re.slice(0, 60)}`);
-    } else if (sig !== "hold") {
-      logger.info(`[ST] ${sym}: ${regime} | score=${sc} sig=${sig} cf=${cf} | ${re.slice(0, 60)}`);
+    // 硬安全规则：极端偏离检查
+    const extremeCheck = checkExtremeDeviation(maDist, at, i1.rsi14,
+      p > i1.ema20 ? "short" : "long", 3);
+    const hasExtremeRisk = extremeCheck.hit;
+    // 行情质量评分（影响仓位大小，独立于方向）
+    const raw1h = o?.["1h"] || [], raw15m = o?.["15m"] || [], raw5m = o?.["5m"] || [];
+    const fr = t.fundingRate !== undefined ? Math.abs(Number(t.fundingRate)) : 0;
+    const mq = calcMarketQuality(convertCandles(raw1h), convertCandles(raw15m), convertCandles(raw5m), fr);
+    // 动态止损止盈
+    const dynSlPct = Math.max(2, Math.min(8, at * 2));
+    const dynTpPct = Math.max(4, Math.min(15, at * 4));
+    // 动态杠杆（只看波动率）
+    const volMaxMult = at > 1.5 ? 0.7 : at > 0.8 ? 1.0 : 1.5;
+    const dynLeverage = Math.min(CONFIG.maxLeverage,
+      Math.round(CONFIG.defaultLeverage * volMaxMult)
+    );
+    // 动态仓位（只看行情质量）
+    const basePct = CONFIG.basePositionPct;
+    let adjPct = basePct, adjLeverage = dynLeverage;
+    if (mq >= 70) { adjPct = basePct; }
+    else if (mq >= 40) { adjPct = Math.round(basePct * 0.6); adjLeverage = dynLeverage > 6 ? dynLeverage - 2 : dynLeverage; }
+    else if (mq >= 20) { adjPct = Math.round(basePct * 0.4); adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }
+    // 分析摘要（纯数据描述，不做方向判断）
+    const regimeDesc = `${adxDesc(dailyAdx)}${dailyUp ? '/日线偏多' : '/日线偏空'}`;
+    const summaryDesc = hasExtremeRisk
+      ? `${regimeDesc} ${extremeCheck.label}风险(${extremeCheck.detail})`
+      : `ADX${dailyAdx.toFixed(0)} RSI${i1.rsi14.toFixed(0)} ATR${at.toFixed(2)}% 量价待AI判断`;
+    // 供AI展示的行情摘要
+    const mqDesc = mq >= 70 ? '高质量' : mq >= 40 ? '中等' : mq >= 20 ? '低质量' : '差';
+    const td = `${regimeDesc} | 行情质量:${mqDesc}(${mq})`;
+    a.push({
+      symbol: sym, regime: regimeDesc, score: 0, trend: "neutral", strength: "weak",
+      keyLevels: kl, summary: summaryDesc,
+      analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: td, analysis_1d: adxDesc(id.adx),
+    });
+    logger.info(`[ST] ${sym}: ${regimeDesc} | 待AI判断 | ${summaryDesc.slice(0, 60)}`);
+    // 生成空信号（score=0, cf=0.5）供index.ts执行循环参考，
+    // AI方向复核（ai-check.ts）的评分决定是否实际执行
+    const baseRe = `${regimeDesc} 待AI确认`;
+    const baseScore = 0;
+    const baseCf = 0.5;
+    // 极低质量行情也给AI机会判断，仅记录日志
+    if (mq < 20) {
+      logger.info(`[MQ] ${sym}: mq=${mq} 低质量行情, 留待AI判断`);
     }
-    if (sig !== "hold") {
-      // 按行情类型动态计算杠杆
-      let leverageMult = 1.0;
-      if (regime === "强趋势多" || regime === "强趋势空") leverageMult = 1.5;
-      else if (regime === "弱趋势多" || regime === "弱趋势空") leverageMult = 0.7;
-      else leverageMult = 0.4; // 震荡偏多/空
-      // 高波动币降杠杆：ATR > 0.8% 限制倍率上限，防止损截断后价格距离过小
-      //   ATR 1.15% × 1.2 × 9x = 12.42% → 截断到 10% → 实际 10% / 9x = 1.11% 就止损
-      //   降为 6x 后：ATR 1.15% × 1.2 × 6x = 8.28% → 实际 8.28% / 6x = 1.38%
-      const volMaxMult = at > 1.5 ? 0.7 : at > 0.8 ? 1.0 : 1.5;
-      leverageMult = Math.min(leverageMult, volMaxMult);
-      const dynLeverage = Math.min(CONFIG.maxLeverage,
-        Math.round(CONFIG.defaultLeverage * leverageMult)
-      );
-      // 行情质量评分 → 动态调整仓位/杠杆/信心
-      const raw1h = o?.["1h"] || [], raw15m = o?.["15m"] || [], raw5m = o?.["5m"] || [];
-      const fr = t.fundingRate !== undefined ? Math.abs(Number(t.fundingRate)) : 0;
-      const mq = calcMarketQuality(convertCandles(raw1h), convertCandles(raw15m), convertCandles(raw5m), fr);
-      const basePct = CONFIG.basePositionPct;
-      let adjPct = basePct, adjLeverage = dynLeverage;
-      if (mq >= 70) { adjPct = basePct; }                              // 高质量 → 满仓
-      else if (mq >= 40) { adjPct = Math.round(basePct * 0.6); adjLeverage = dynLeverage > 6 ? dynLeverage - 2 : dynLeverage; }  // 中等 → 60%
-      else if (mq >= 20) { adjPct = Math.round(basePct * 0.4); adjLeverage = dynLeverage > 4 ? dynLeverage - 3 : Math.max(dynLeverage, 2); }  // 低质量 → 40%
-      else { sig = "hold"; sc = 0; re = `低行情质量(mq${mq})，跳过`; }  // 很差 → 跳过
-      // 反转模式下，K线质量高→信心加，低→信心减（不完全拦截）
-      if (sig !== "hold" && bt.optimalStrategy === "reversal") {
-        const lastCandle = o?.["1h"]?.[o["1h"].length - 1];
-        if (lastCandle) {
-          const hq = isHighQualitySignal(lastCandle.open, lastCandle.high, lastCandle.low, lastCandle.close, i1.atr14);
-          if (hq) {
-            cf = Math.min(1.0, cf + 0.1);
-          } else {
-            cf = Math.max(0.4, cf - 0.1);
-          }
-        }
-      }
-      // 【优化】低杠杆+低质量行情不交易
-      if (sig !== "hold" && mq < 40 && adjLeverage <= 4) {
-        sig = "hold"; sc = 0;
-        re = `低质低杠杆(lev${adjLeverage} mq${mq}),跳过`;
-      }
-      if (sig !== "hold") {
-        // AI 复盘反馈 — 动态调整评分/杠杆/置信度
-        const adjScore = getAdjustedScore(sym, sc, re);
-        const adjLev = getAdjustedLeverage(adjLeverage);
-        const adjCf = getAdjustedConfidenceFloor(cf);
-        if (adjScore === 0) {
-          logger.info(`[ADJ] ${sym} 复盘调整后 score=0，跳过 (原${sc} ${re.slice(0,30)})`);
-          continue;
-        }
-        if (adjScore !== sc || adjLev !== adjLeverage) {
-          logger.info(`[ADJ] ${sym}: score ${sc}→${adjScore} | lev ${adjLeverage}→${adjLev} | cf ${cf}→${adjCf}`);
-        }
-        logger.info(`[MQ] ${sym}: mq=${mq} sig=${sig} pct=${adjPct} lev=${adjLev}`);
-        // 动态止盈止损：基于 1h ATR + 回测置信度
-        const dynSlPct = Math.max(2, Math.min(8, at * 2));
-        const dynTpPct = Math.max(4, Math.min(15, at * 4));
-        // 【优化】日线EMA20方向检查：价格在线下做多或线上做空→逆势降权
-        let finalCf = adjCf, finalScore = adjScore, finalRe = re;
-        if (id && id.ema20 > 0) {
-          const emaDist = ((p - id.ema20) / id.ema20 * 100).toFixed(1);
-          if (sig === "buy" && p < id.ema20) {
-            finalCf = Math.max(0.15, adjCf * 0.3);
-            finalScore = Math.round(adjScore * 0.3);
-            finalRe = `${re}[逆日线EMA,价下${emaDist}%]`;
-          } else if (sig === "sell" && p > id.ema20) {
-            finalCf = Math.max(0.15, adjCf * 0.3);
-            finalScore = Math.round(adjScore * 0.3);
-            finalRe = `${re}[逆日线EMA,价上${emaDist}%]`;
-          }
-        }
-        nt.push({ action: sig, symbol: sym, leverage: adjLev, amountPercent: adjPct, reason: finalRe, confidence: finalCf, score: finalScore, stopLossPct: dynSlPct, takeProfitPct: dynTpPct, regime: rl, marketQuality: mq } as any);
-      }
-      if (mq < 20) {
-        logger.info(`[MQ] ${sym}: mq=${mq} < 20 信号被行情质量拦截`);
-      }
-    }
+    nt.push({
+      action: p > i1.ema20 ? "buy" : "sell",  // 仅作参考方向，AI复核决定
+      symbol: sym, leverage: adjLeverage, amountPercent: adjPct,
+      reason: baseRe, confidence: baseCf, score: baseScore,
+      stopLossPct: dynSlPct, takeProfitPct: dynTpPct,
+      regime: regimeDesc, marketQuality: mq,
+    } as any);
   }
 
   // 按币种建立回测结果索引
@@ -391,30 +215,7 @@ export async function generateStrategyReport(
     }
     pc.push({ symbol: pos.symbol, action: ac, reason: rr, confidence: 0.8 });
   }
-  // 市场偏向修正（BTC权重翻倍）：一方占比≥2/3才算主导，否则均衡不做修正
-  const weight = (x: any) => x.symbol === "BTC/USDT" ? 2 : 1;
-  const totalBull = a.filter(x => x.trend === "bullish").reduce((s, x) => s + weight(x), 0);
-  const totalBear = a.filter(x => x.trend === "bearish").reduce((s, x) => s + weight(x), 0);
-  const total = Math.max(totalBull + totalBear, 1);
-  const marketBullish = totalBull / total >= 0.60;
-  const marketBearish = totalBear / total >= 0.60;
   const btSummaries = btResults.map((bt, i) => generateBacktestSummary(CONFIG.symbols[i] || "?", bt));
-
-  for (const t of nt) {
-    if (t.action === "hold") continue;
-    const isReverse = (t.action === "buy" && marketBearish) || (t.action === "sell" && marketBullish);
-    if (isReverse) {
-      // 强市场偏向 + 回测确认 → 物理禁做逆势交易
-      const strongBias = (t.action === "sell" && marketBullish && totalBull >= total * 0.66)
-                       || (t.action === "buy" && marketBearish && totalBear >= total * 0.66);
-      if (strongBias) {
-        t.action = "hold";
-        logger.info(`[BT] ${t.symbol} 逆势信号被市场偏向+回测拦截 (${t.action} in ${marketBullish ? "bullish" : "bearish"}市场)`);
-      } else {
-        t.confidence = Math.max(0.3, (t.confidence || 0) - 0.15);
-        t.score = Math.round((t.score || 0) * 0.7);
-      }
-    }
-  }
+  // 市场偏向修正已移除（AI自行判断）
   return { analysis: a, positions: pc, newTrades: nt, summary: `【策略周期】${a.length}币种 ${pc.filter(x=>x.action!=="hold").length}持仓指令 ${nt.length}交易信号`, backtestSummaries: btSummaries };
 }
