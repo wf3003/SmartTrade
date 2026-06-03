@@ -10,7 +10,7 @@ import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
 import { generateStrategyReport } from "./strategy";
-import { checkExtremeDeviation, calcMACD } from "./indicators";
+import { checkExtremeDeviation, calcMACD, calcIndicators, convertCandles } from "./indicators";
 import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties } from "./state";
@@ -594,10 +594,29 @@ async function aiDecisionCycle() {
         const ohlcv = ohlcvData.get(sym);
         const c1d = ohlcv?.["1d"]?.map(c => c.close) || [];
         const macd = calcMACD(c1d);
-        const macdStr = macd.signal !== "数据不足" ? `MACD:${macd.signal}(DIF${macd.dif} DEA${macd.dea})` : "";
-        const volStr = t.volume24h ? `量${t.volume24h > 1e6 ? (t.volume24h/1e6).toFixed(1)+"M" : t.volume24h > 1e3 ? (t.volume24h/1e3).toFixed(1)+"K" : t.volume24h.toFixed(0)}` : "";
+        const macdStr = macd.signal !== "数据不足" ? `MACD:${macd.signal}` : "";
+        const volStr = t.volume24h ? `量${t.volume24h > 1e6 ? (t.volume24h/1e6).toFixed(1)+"M" : (t.volume24h/1e3).toFixed(1)+"K"}` : "";
         const frStr = t.fundingRate !== undefined ? `费率${(t.fundingRate * 100).toFixed(3)}%` : "";
-        return `${sym}:$${t.price} RSI${rsi.toFixed(0)} ATR${atr.toFixed(2)}% ${volStr} ${frStr} ${macdStr} ${analysis?.analysis_1d || ""} ${analysis?.summary ? ("| " + analysis.summary) : ""}`;
+        // 多周期EMA方向快照（每时间框架：EMA20方向+BB位置）
+        const tfSnaps: string[] = [];
+        for (const tf of ["5m","15m","1h","1d"]) {
+          const raw = ohlcv?.[tf];
+          if (raw && raw.length >= 8) {
+            const arr = convertCandles(raw);
+            const ind = calcIndicators(arr);
+            if (ind) {
+              const price = arr[arr.length-1][4];
+              const emaDir = price > ind.ema20 ? "↑" : "↓";
+              const bbP = ind.bbUpper > ind.bbLower ? Math.round((price-ind.bbLower)/(ind.bbUpper-ind.bbLower)*100) : 50;
+              const adx = ind.adx.toFixed(0);
+              const r = ind.rsi14.toFixed(0);
+              tfSnaps.push(`${tf}:${emaDir}20 ADX${adx} RSI${r} BB${bbP}%`);
+            }
+          }
+        }
+        const tfLine = tfSnaps.length > 0 ? tfSnaps.join(" ") : "";
+        return `${sym}:$${t.price?.toFixed(2)} RSI${rsi.toFixed(0)} ATR${atr.toFixed(1)}% ${frStr} ${volStr} ${macdStr} ${analysis?.analysis_1d || ""}
+  ${tfLine}`;
       }).join("\n");
     // 持仓数据：合并交易所持仓 + 策略分析（让AI能基于趋势/RSI/策略判断该不该平仓）
     const posLines = positions.length > 0
