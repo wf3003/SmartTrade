@@ -92,8 +92,13 @@ ${scoringAdvice}
     → 所有信号评分 ≤ 50
  4. 对整个市场行情质量给出 market_quality 0-100
   回测结果仅作参考，多周期交叉验证优先。
-格式：
-{"signals":[{"symbol":"BTC/USDT","action":"sell","score":85,"reason":"(回测:延续 cf80%) 费率中性 量正常"},...],
+格式（每个币种各输出一多一空两条信号）：
+{"signals":[
+  {"symbol":"BTC/USDT","action":"sell","score":85,"reason":"(回测:延续 cf80%) 费率中性 量正常 RSI42"},
+  {"symbol":"BTC/USDT","action":"buy","score":25,"reason":"(回测:延续 cf80%) 强空头趋势,RSI42正常,做多逆势"},
+  {"symbol":"ETH/USDT","action":"sell","score":45,"reason":"(回测:延续 cf74%) 费率-0.019%扣20分 RSI34"},
+  {"symbol":"ETH/USDT","action":"buy","score":55,"reason":"RSI34偏低+BB下轨,短周期反弹可能"}
+],
  "positions":[{"symbol":"ETH/USDT","action":"hold","reason":"趋势完好"},...],
  "market_quality":65}
 reason必须含：费率方向+量状态+RSI，如有冲突项需列举。`;
@@ -110,8 +115,11 @@ reason必须含：费率方向+量状态+RSI，如有冲突项需列举。`;
     const text = resp.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(text);
     if (parsed.signals) {
-      for (const r of parsed.signals) {
-        result.signals.set(`${r.symbol}:${r.action}`, { score: r.score ?? 50, reason: r.reason || "" });
+      const aiBySym = new Map<string, any>();
+      for (const r of parsed.signals) aiBySym.set(r.symbol, r);
+      for (const s of signals) {
+        const r = aiBySym.get(s.symbol);
+        if (r) result.signals.set(`${s.symbol}:${s.action}`, { score: r.score ?? 50, reason: r.reason || "" });
       }
     }
     if (parsed.positions) {
