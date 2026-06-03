@@ -828,21 +828,28 @@ async function aiDecisionCycle() {
 
         const aiRsn = aiResult?.signals.get(trade.symbol)?.reason || "无AI分析";
         const aiSc = aiResult?.signals.get(trade.symbol)?.score ?? 0;
+        const side = trade.action === "buy" ? "long" : "short";
+        const margin = Number(account.availableBalance) * trade.amountPercent / 100;
+        const ticker = tickers.get(trade.symbol);
+
+        const snap = {
+          rsi: Math.round(rsiCache.get(trade.symbol) || 50),
+          atrPct: ((atrCache.get(trade.symbol) || 0.015) * 100).toFixed(2),
+          fundingRatePct: ((ticker?.fundingRate || 0) * 100).toFixed(4),
+          vol24hM: ticker?.volume24h ? (ticker.volume24h / 1e6).toFixed(1) : '?',
+          price: ticker?.price,
+        };
         logger.warn(`🤖 AI 开仓: ${trade.action} ${trade.symbol} | ${trade.leverage}x | ${trade.amountPercent}%`);
         logger.info(`   AI评分:${aiSc} ${aiRsn}`);
-        logger.info(`   策略指标: ${trade.reason}`);
+        logger.info(`   快照 RSI:${snap.rsi} ATR:${snap.atrPct}% 费率:${snap.fundingRatePct}% 量:${snap.vol24hM}M`);
 
         const decId = insertDecision({
           time: new Date().toISOString(), ai_model: CONFIG.ai.model,
           signal: trade.action, symbol: trade.symbol, action: trade.action,
           leverage: trade.leverage, amount: trade.amountPercent,
           reason: `AI:${aiSc}分 ${aiRsn}`, confidence: trade.confidence,
-          raw_response: JSON.stringify({ trade, aiScore: aiSc, aiReason: aiRsn }),
+          raw_response: JSON.stringify({ trade, aiScore: aiSc, aiReason: aiRsn, indicatorsSnapshot: snap }),
         });
-
-        const side = trade.action === "buy" ? "long" : "short";
-        const margin = Number(account.availableBalance) * trade.amountPercent / 100;
-        const ticker = tickers.get(trade.symbol);
         if (!ticker || Number(ticker.price) <= 0) { updateDecisionStatus(decId, "failed"); continue; }
 
         const contractSize = exchangeManager.getContractSize(trade.symbol);

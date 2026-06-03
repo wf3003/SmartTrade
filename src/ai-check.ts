@@ -72,24 +72,22 @@ ${scoringAdvice}
      · 成交量持续萎缩 + 价格停滞
      · RSI单一超买/超卖不是足够的理由
    - 其他情况 → hold
-3. 给出整体市场偏向 market_bias（bullish/bearish/balanced），用于修正逆势信号
- 4. 对整个市场行情质量给出 market_quality 0-100：
-    - ATR在放大还是收窄？K线实体大还是小？多周期方向一致还是矛盾？
-    - 高质量=趋势清晰适合交易，低质量=震荡/纠结
-
- 回测结果仅作参考（AI基于完整指标自主判断）：
-   - 回测标记"延续"或"反转"可参考但不强制
-   - RSI极端值（超买/超卖）正常纳入判断
-   - 多周期交叉验证优先于单周期回测结论
-
+3. 给出整体市场偏向 market_bias（bullish/bearish/balanced）
+ 评分规则（必须遵守，违反扣相应分）：
+ a) 多维度冲突降分：以下≥3项同时出现 → score ≤ 40
+    · RSI < 25（做多则为RSI > 75）
+    · 费率方向不利（做空费率<0利多、做多费率>0利空）
+    · 成交量萎缩（< 均量0.8×）
+    · BB触及极端（做空下轨、做多上轨）
+ b) 费率权重：不利每超0.01%扣10分，有利每超0.01%加5分
+ c) 趋势尾部：底背离（价跌RSI不跌）或ADX回落10+点+量缩 → score ≤ 50
+ 4. 对整个市场行情质量给出 market_quality 0-100
+  回测结果仅作参考，多周期交叉验证优先。
 格式：
-{"signals":[{"symbol":"BTC/USDT","score":85,"reason":"(回测:延续 cf80%) ADX高位RSI合理, 费率中性, 量正常"},...],
+{"signals":[{"symbol":"BTC/USDT","score":85,"reason":"(回测:延续 cf80%) 费率中性 量正常"},...],
  "positions":[{"symbol":"ETH/USDT","action":"hold","reason":"趋势完好"},...],
  "market_quality":65}
-
-reason字段格式: (回测:延续/反转 cfXX%) 核心判断, 费率XX%, 量状态
-例: (回测:延续 cf77%) 回踩EMA20, 费率-0.008%偏空, 量萎缩→谨慎做多
-必须明确引用回测结论+费率方向+量状态, 不要省略。`;
+reason必须含：费率方向+量状态+RSI，如有冲突项需列举。`;
 
   try {
     const resp = await openai.chat.completions.create({

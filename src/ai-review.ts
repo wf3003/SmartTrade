@@ -8,17 +8,38 @@ import { openai } from "./ai-client";
 export function buildDecisionAnalysis(decisions: any[]): string {
   if (!decisions || decisions.length === 0) return "";
   const recent = decisions.filter(d => d.raw_response).slice(-20);
+  
+  // Count decisions with structured snapshots for summary
+  let withSnap = 0;
+  const snapshots: any[] = [];
+  
   const lines = recent.map((d: any) => {
     try {
       const raw = JSON.parse(d.raw_response);
       const aiScore = raw.aiScore ?? "?";
       const aiReason = (raw.aiReason || "").slice(0, 80);
+      const snap = raw.indicatorsSnapshot;
+      if (snap) {
+        withSnap++;
+        snapshots.push({ symbol: d.symbol, action: d.action, aiScore, rsi: snap.rsi, fundingRatePct: snap.fundingRatePct, status: d.status });
+      }
       return `${d.symbol} ${d.action} | AI评分:${aiScore} | ${aiReason} | 状态:${d.status}`;
     } catch {
       return `${d.symbol} ${d.action} | ${(d.reason||"").slice(0, 80)} | 状态:${d.status}`;
     }
   });
-  return `【AI决策历史（最近${lines.length}条）】\n${lines.join("\n")}`;
+
+  let snapSection = '';
+  if (snapshots.length > 0) {
+    snapSection = '\n【开仓时指标快照（结构化数据，供统计分析）】\n';
+    snapSection += 'RSI  | 费率   | 操作 | AI评分\n';
+    for (const s of snapshots) {
+      snapSection += `RSI${s.rsi} | ${s.fundingRatePct}% | ${s.symbol} ${s.action} | 评分${s.aiScore}\n`;
+    }
+    snapSection += '\n请分析：哪些RSI/费率组合下AI评分偏高/偏低？哪个区间的决策最终盈利？\n';
+  }
+
+  return `【AI决策历史（最近${lines.length}条）】\n${lines.join("\n")}${snapSection}`;
 }
 
 export async function aiTradeReview(
