@@ -758,6 +758,28 @@ async function aiDecisionCycle() {
 
         // 行情质量：从策略引擎获取
         const sa = strategyReport.analyses.find(a => a.symbol === trade.symbol);
+        const ticker = tickers.get(trade.symbol);
+
+        // ===== 硬性信号过滤：AI复盘反复验证的亏损规律，代码级阻断 =====
+        // ① 回测延续率<55%且反转<55%的币种不追（AI证实: AAVE延续率仅50%导致4败）
+        if (sa?.backtest && sa.backtest.contAccuracy < 55 && sa.backtest.revAccuracy < 55) {
+          const msg = `⏭️ ${trade.symbol} 回测延续${sa.backtest.contAccuracy.toFixed(0)}%反转${sa.backtest.revAccuracy.toFixed(0)}%均<55%，跳过`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `回测双低` });
+          logger.info(msg); execLog.push(msg); continue;
+        }
+        // ② 做空时资金费率>0.01%(空头支付成本高)，AI证实AAVE正费率做空全亏
+        if (trade.action === "sell" && ticker && (ticker.fundingRate || 0) > 0.010) {
+          const fr = ((ticker.fundingRate || 0) * 100).toFixed(2);
+          const msg = `⏭️ ${trade.symbol} 做空但费率${fr}%>0.01%，轧空风险跳过`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `正费率${fr}%` });
+          logger.info(msg); execLog.push(msg); continue;
+        }
+        // ③ AI评分<40直接跳（AI证实: 评分29的信号-7.9%亏损）
+        if (aiScore < 40) {
+          const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<40，质量不足跳过`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分${aiScore}<40` });
+          logger.info(msg); execLog.push(msg); continue;
+        }
         const mq = sa?.sentiment?.marketQuality ?? 50;
         if (mq < 20) {
           const msg = `⏭️ ${trade.symbol} 行情质量${mq}<20，跳过`;
@@ -826,7 +848,6 @@ async function aiDecisionCycle() {
         const aiSc = aiScore;
         const side = trade.action === "buy" ? "long" : "short";
         const margin = Number(account.availableBalance) * trade.amountPercent / 100;
-        const ticker = tickers.get(trade.symbol);
 
         const snap = {
           rsi: Math.round(rsiCache.get(trade.symbol) || 50),
