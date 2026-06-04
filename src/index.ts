@@ -724,21 +724,6 @@ async function aiDecisionCycle() {
         // 方向由AI决定，strategy仅给出参考方向
         if (existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "已有持仓" }); logger.info(`已有 ${trade.symbol} 持仓，跳过`); continue; }
         if (existingSymbols.size >= CONFIG.maxPositions) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
-        // 同方向保证金占比硬上限：不管分多少仓，做空/做多保证金总额不超过权益的40%
-        const tradeSide = trade.action === "buy" ? "long" : "short";
-        const sameSideMargin = positions
-          .filter((p: any) => p.side === tradeSide)
-          .reduce((sum: number, p: any) => sum + (p.margin || 0), 0);
-        const newMargin = Number(account.availableBalance) * trade.amountPercent / 100;
-        const equity = account.totalEquity || 1;
-        const currentSideExposure = (sameSideMargin / equity) * 100;
-        const newExposure = (newMargin / equity) * 100;
-        const MAX_SIDE_MARGIN = 40;
-        if (currentSideExposure + newExposure > MAX_SIDE_MARGIN) {
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `同方向保证金已达${currentSideExposure.toFixed(1)}%` });
-          logger.info(`⏸️ ${trade.symbol} 同方向保证金${currentSideExposure.toFixed(1)}%+新仓${newExposure.toFixed(1)}%>${MAX_SIDE_MARGIN}%，跳过`);
-          continue;
-        }
         // 止损冷却检查：递增惩罚
         const dynMin = getDynamicCooldown(trade.symbol);
         const dynMs = dynMin * 60000;
@@ -818,6 +803,23 @@ async function aiDecisionCycle() {
           const origPct = trade.amountPercent;
           trade.amountPercent = Math.min(CONFIG.basePositionPct * 2, Math.round(trade.amountPercent * posMult));
           logger.info(`   ${trade.symbol} 胜率仓位乘数x${posMult.toFixed(1)}: ${origPct}%→${trade.amountPercent}%`);
+        }
+
+        // 6. 同方向保证金硬上限：用过滤后的最终仓位检查，防市场反弹多仓同时亏损
+        const tradeSide = trade.action === "buy" ? "long" : "short";
+        const existingSideMargin = positions
+          .filter((p: any) => p.side === tradeSide)
+          .reduce((sum: number, p: any) => sum + (p.margin || 0), 0);
+        const newMargin = Number(account.availableBalance) * trade.amountPercent / 100;
+        const equity = account.totalEquity || 1;
+        const sideExposure = (existingSideMargin / equity) * 100;
+        const newExposure = (newMargin / equity) * 100;
+        const MAX_SIDE_MARGIN = 40;
+        if (sideExposure + newExposure > MAX_SIDE_MARGIN) {
+          const msg = `同方向保证金已达${sideExposure.toFixed(1)}%，新仓${newExposure.toFixed(1)}%>${MAX_SIDE_MARGIN}%上限`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: msg });
+          logger.info(`⏸️ ${trade.symbol} ${msg}，跳过`);
+          continue;
         }
 
         const aiRsn = trade.reason || "无AI分析";
