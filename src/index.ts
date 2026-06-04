@@ -767,11 +767,11 @@ async function aiDecisionCycle() {
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `回测双低` });
           logger.info(msg); execLog.push(msg); continue;
         }
-        // ② 做空时资金费率>0.01%(空头支付成本高)，AI证实AAVE正费率做空全亏
-        if (trade.action === "sell" && ticker && (ticker.fundingRate || 0) > 0.010) {
+        // ② 做空时负费率(空头拥挤=空头付费)避险：太多人做空→轧空概率高
+        if (trade.action === "sell" && ticker && (ticker.fundingRate || 0) < -0.010) {
           const fr = ((ticker.fundingRate || 0) * 100).toFixed(2);
-          const msg = `⏭️ ${trade.symbol} 做空但费率${fr}%>0.01%，轧空风险跳过`;
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `正费率${fr}%` });
+          const msg = `⏭️ ${trade.symbol} 做空但费率${fr}%(空头拥挤)，轧空风险跳过`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `空头拥挤${fr}%` });
           logger.info(msg); execLog.push(msg); continue;
         }
         // ③ AI评分<40直接跳（AI证实: 评分29的信号-7.9%亏损）
