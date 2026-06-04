@@ -91,11 +91,11 @@ export function checkProfitProtect(
   currentPnlPct: number,
 ): { shouldClose: boolean; reason: string } | null {
   if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
-  // 四档阶梯保护：盈利越多越能扛波动（峰值越高、容忍回撤越大）
-  const protectLine = peakPnlPct >= 20 ? peakPnlPct - 12
-                     : peakPnlPct >= 12 ? peakPnlPct - 7
-                     : peakPnlPct >= 6  ? peakPnlPct - 4
-                     : peakPnlPct * 0.5;
+  // 四档阶梯保护：小利锁住，大利彻底放手
+  // <6%: 严格锁利 | 6-15%: 适当宽松 | >=15%: 几乎不管
+  const protectLine = peakPnlPct >= 15 ? peakPnlPct * 0.20
+                     : peakPnlPct >= 6  ? peakPnlPct * 0.40
+                     : peakPnlPct * 0.50;
   const line = Math.max(protectLine, 1.5);
   if (currentPnlPct < line) {
     return {
