@@ -789,20 +789,20 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} 行情质量${mq}，仓位降至${trade.amountPercent}%`);
         }
 
-        // 入场质量硬阻断：方向对应的评分 < 20 不开仓
+        // 入场质量硬阻断：方向对应的评分<35不开仓（原<20，收紧以过滤RSI超卖/B追空）
         if (sa?.entryQuality) {
           const entryScore = trade.action === "buy"
             ? sa.entryQuality.longEntryScore
             : sa.entryQuality.shortEntryScore;
-          if (entryScore < 20) {
-            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<20，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
+          if (entryScore < 35) {
+            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<35，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
             logger.info(msg);
             execLog.push(msg);
             continue;
-          } else if (entryScore < 50) {
+          } else if (entryScore < 55) {
             trade.amountPercent = Math.round(trade.amountPercent * 0.5);
-            logger.info(`   ${trade.symbol} 入场质量${entryScore}<50，仓位减半至${trade.amountPercent}%`);
+            logger.info(`   ${trade.symbol} 入场质量${entryScore}<55，仓位减半至${trade.amountPercent}%`);
           } else if (sa.entryQuality.suggestion === "unfavorable") {
             const msg = `⏭️ ${trade.symbol} 入场质量评级 unfavorable，当前周期不开新仓`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "入场质量unfavorable" });
