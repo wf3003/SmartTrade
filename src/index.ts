@@ -767,14 +767,7 @@ async function aiDecisionCycle() {
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `回测双低` });
           logger.info(msg); execLog.push(msg); continue;
         }
-        // ② 做空时正费率(多头拥挤)避险：多数人看多→逆势做空易轧空
-        if (trade.action === "sell" && ticker && (ticker.fundingRate || 0) > 0.010) {
-          const fr = ((ticker.fundingRate || 0) * 100).toFixed(2);
-          const msg = `⏭️ ${trade.symbol} 做空但费率${fr}%(多头拥挤)，轧空风险跳过`;
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `多头拥挤${fr}%` });
-          logger.info(msg); execLog.push(msg); continue;
-        }
-        // ③ AI评分<40直接跳（AI证实: 评分29的信号-7.9%亏损）
+        // ② AI评分<40直接跳（AI证实: 评分29的信号-7.9%亏损）
         if (aiScore < 40) {
           const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<40，质量不足跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分${aiScore}<40` });
