@@ -91,11 +91,9 @@ export function checkProfitProtect(
   currentPnlPct: number,
 ): { shouldClose: boolean; reason: string } | null {
   if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
-  // 四档阶梯保护：小利锁住，大利彻底放手
-  // <6%: 严格锁利 | 6-15%: 适当宽松 | >=15%: 几乎不管
-  const protectLine = peakPnlPct >= 15 ? peakPnlPct * 0.20
-                     : peakPnlPct >= 6  ? peakPnlPct * 0.40
-                     : peakPnlPct * 0.50;
+  // 统一安全网：不管利润多大，回撤超75%必须保护（防黑天鹅）
+  // 但不再用层层收紧的阶梯——盈利大就该扛波动
+  const protectLine = peakPnlPct * 0.25;
   const line = Math.max(protectLine, 1.5);
   if (currentPnlPct < line) {
     return {
