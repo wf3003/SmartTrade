@@ -15,7 +15,7 @@ import { getMarketReport } from "./agent";
 import { checkExtremeDeviation, calcMACD, calcIndicators, convertCandles } from "./indicators";
 import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties } from "./state";
+import { setLatestReport, atrCache, rsiCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats, buildDecisionAnalysis } from "./ai-review";
 import { 
@@ -797,6 +797,14 @@ async function aiDecisionCycle() {
           }
         }
 
+        // 5. 基于历史胜率的仓位乘数：高胜率币种自动放大仓位
+        const posMult = symbolPositionMult.get(trade.symbol) ?? 1.0;
+        if (posMult !== 1.0) {
+          const origPct = trade.amountPercent;
+          trade.amountPercent = Math.min(CONFIG.basePositionPct * 2, Math.round(trade.amountPercent * posMult));
+          logger.info(`   ${trade.symbol} 胜率仓位乘数x${posMult.toFixed(1)}: ${origPct}%→${trade.amountPercent}%`);
+        }
+
         const aiRsn = trade.reason || "无AI分析";
         const aiSc = aiScore;
         const side = trade.action === "buy" ? "long" : "short";
@@ -892,6 +900,11 @@ async function scheduleReview(currentCycle: number) {
         if (Array.isArray(parsed.bySymbol)) {
           applySymbolAnalysis(parsed.bySymbol);
         }
+        // 1b. 基于历史胜率 → 自动调整仓位乘数（高胜率大仓位、低胜率小仓位）
+        const historyTrades = db.prepare(
+          "SELECT symbol, pnl, status FROM trades WHERE status = 'closed' ORDER BY id DESC LIMIT 500"
+        ).all() as any[];
+        applyWinRateReward(historyTrades);
         // 2. 信号类型 → 增加分数惩罚（追空/追涨扣分）
         if (parsed.blockSignals && typeof parsed.blockSignals === "string") {
           applyBlockSignals(parsed.blockSignals);

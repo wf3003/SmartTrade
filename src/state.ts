@@ -162,6 +162,56 @@ export function applyBlockSignals(blockSignals: string): void {
   }
 }
 
+// ===== 基于历史胜率的仓位乘数 =====
+// 根据每个币种最近 N 笔已平仓交易的胜率自动调整仓位大小
+
+/** 币种仓位乘数（默认1.0，高胜率提升，低胜率降低） */
+export const symbolPositionMult = new Map<string, number>();
+
+/** 根据历史交易胜率更新仓位乘数 */
+export function applyWinRateReward(trades: any[]): void {
+  const N = 15; // 取最近 N 笔
+  const minTrades = 3; // 最少需要几笔才计算
+
+  // 按币种分组，只取最近 N 笔已平仓的交易
+  const bySymbol: Record<string, { pnls: number[]; wins: number }> = {};
+  for (const t of (trades || [])) {
+    if (t.status !== "closed") continue;
+    if (!bySymbol[t.symbol]) bySymbol[t.symbol] = { pnls: [], wins: 0 };
+    if (bySymbol[t.symbol].pnls.length >= N) continue;
+    bySymbol[t.symbol].pnls.push(t.pnl || 0);
+    if ((t.pnl || 0) > 0) bySymbol[t.symbol].wins++;
+  }
+
+  for (const [sym, data] of Object.entries(bySymbol)) {
+    const total = data.pnls.length;
+    if (total < minTrades) continue;
+
+    const winRate = data.wins / total;
+    const totalPnl = data.pnls.reduce((s, v) => s + v, 0);
+
+    let mult = 1.0;
+    if (winRate >= 0.80 && total >= 5) {
+      mult = 2.0;
+      logger.info(`⚙️ ${sym} 胜率${(winRate*100).toFixed(0)}%(${data.wins}W/${total-data.wins}L) PnL:$${totalPnl.toFixed(2)} → 仓位x2.0`);
+    } else if (winRate >= 0.65 && total >= 4) {
+      mult = 1.5;
+      logger.info(`⚙️ ${sym} 胜率${(winRate*100).toFixed(0)}%(${data.wins}W/${total-data.wins}L) PnL:$${totalPnl.toFixed(2)} → 仓位x1.5`);
+    } else if (winRate >= 0.50 && total >= 4) {
+      mult = 1.2;
+      logger.info(`⚙️ ${sym} 胜率${(winRate*100).toFixed(0)}%(${data.wins}W/${total-data.wins}L) → 仓位x1.2`);
+    } else if (winRate <= 0.20 && total >= 3) {
+      mult = 0.3;
+      logger.info(`⚙️ ${sym} 胜率${(winRate*100).toFixed(0)}%(${data.wins}W/${total-data.wins}L) PnL:$${totalPnl.toFixed(2)} → 仓位x0.3`);
+    } else if (winRate <= 0.35 && total >= 3) {
+      mult = 0.5;
+      logger.info(`⚙️ ${sym} 胜率${(winRate*100).toFixed(0)}%(${data.wins}W/${total-data.wins}L) PnL:$${totalPnl.toFixed(2)} → 仓位x0.5`);
+    }
+
+    symbolPositionMult.set(sym, mult);
+  }
+}
+
 /** 启动时强制覆盖硬性惩罚（不受旧持久化数据干扰） */
 export function ensureHardPenalties(): void {
   // 追空惩罚由AI+回测决定，不再硬编码扣8分
@@ -208,6 +258,7 @@ export async function saveFeedbackToDb(extra?: Record<string, any>): Promise<voi
   const payload = JSON.stringify({
     ...(extra || {}),
     symbolScoreMult: Object.fromEntries(symbolScoreMult),
+    symbolPositionMult: Object.fromEntries(symbolPositionMult),
     signalScorePenalty: Object.fromEntries(signalScorePenalty),
     leverageMult,
     stopLossMult,
@@ -224,6 +275,7 @@ export async function loadFeedbackFromDb(): Promise<void> {
   try {
     const data = JSON.parse(raw);
     if (data.symbolScoreMult) for (const [k, v] of Object.entries(data.symbolScoreMult)) symbolScoreMult.set(k, v as number);
+    if (data.symbolPositionMult) for (const [k, v] of Object.entries(data.symbolPositionMult)) symbolPositionMult.set(k, v as number);
     if (data.signalScorePenalty) for (const [k, v] of Object.entries(data.signalScorePenalty)) signalScorePenalty.set(k, v as number);
     if (typeof data.leverageMult === "number") leverageMult = data.leverageMult;
     if (typeof data.stopLossMult === "number") stopLossMult = data.stopLossMult;
