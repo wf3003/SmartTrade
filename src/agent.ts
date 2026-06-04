@@ -70,7 +70,7 @@ function buildStrategyPrompt(
         const db = openTrades.find((t: any) => t.symbol === p.symbol);
         const partial = db ? getPartialClosePct(db.id as number, db.entry_qty as number) : 0;
         const liqDist = p.liquidationPrice && p.entryPrice
-          ? Math.abs((p.liquidationPrice - p.entryPrice) / p.entryPrice * 100 / (p.leverage || 1)).toFixed(1)
+          ? Math.abs((p.liquidationPrice - p.entryPrice) / p.entryPrice * 100).toFixed(1)
           : '?';
         return `${p.symbol} ${p.side} | 入场:$${p.entryPrice?.toFixed(2)} | PnL:${p.unrealizedPnlPct?.toFixed(2)}% | 清算距:${liqDist}% | 杠杆:${p.leverage}x${partial > 0 ? ` | 已分批:${partial}%` : ''}`;
       }).join("\n")
