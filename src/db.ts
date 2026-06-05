@@ -523,7 +523,7 @@ export function seedDefaultOptRules(): number {
   const insert = db.prepare(`
     INSERT INTO opt_rules (target, regime, indicator, operator, val1, val2, impact_type, impact_value,
       sample_size, win_rate, baseline_win_rate, active, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `);
   for (const r of defaults) {
     insert.run(r.target, r.regime, r.indicator, r.operator, r.val1, null,
