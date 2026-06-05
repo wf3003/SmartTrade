@@ -90,16 +90,27 @@ export interface StopLossResult {
 export function checkProfitProtect(
   peakPnlPct: number,
   currentPnlPct: number,
-): { shouldClose: boolean; reason: string } | null {
+): { shouldClose: boolean; closeHalf: boolean; reason: string } | null {
   if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
-  // 回撤保护线由 intercept_params 控制（默认25%=峰值的75%回撤保护）
-  const pct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 25) / 100;
-  const protectLine = peakPnlPct * pct;
-  const line = Math.max(protectLine, 1.5);
-  if (currentPnlPct < line) {
+
+  const fullPct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 25) / 100;
+  const partialPct = (interceptParamsCache.get("profit_partial_retrace_pct") ?? 45) / 100;
+
+  const fullLine = Math.max(peakPnlPct * fullPct, 1.5);
+  const partialLine = Math.max(peakPnlPct * partialPct, 2.0);
+
+  if (currentPnlPct < fullLine) {
     return {
       shouldClose: true,
-      reason: `浮盈保护: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${line.toFixed(1)}%`,
+      closeHalf: false,
+      reason: `浮盈全部保护: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${fullLine.toFixed(1)}%`,
+    };
+  }
+  if (currentPnlPct < partialLine && peakPnlPct >= 15) { // 需有足够利润才分批
+    return {
+      shouldClose: false,
+      closeHalf: true,
+      reason: `浮盈部分锁利: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${partialLine.toFixed(1)}%`,
     };
   }
   return null;
