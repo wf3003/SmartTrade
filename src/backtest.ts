@@ -20,6 +20,7 @@ export interface BacktestResult {
   contAccuracy: number;      // 延续策略近期准确率
   avgADX: number;            // 近期平均ADX
   reversalSignal?: boolean;  // 原始反转标志（在日线ADX>50强制续时保留）
+  signalQuality?: number;    // 0-100: 回测信号与后续AI交易的匹配度（校准用）
 }
 
 export function runBacktest(

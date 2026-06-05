@@ -57,9 +57,18 @@ const newPositionTime = new Map<string, number>();
 const stopCooldown = new Map<string, number>();
 // 同一币种连续止损计数（递增惩罚）
 const consecutiveStopCount = new Map<string, number>();
-// 止损后暂停该币种交易的最小分钟数
+// 同一币种连续亏损计数（实时阻断，不等复盘）
+const consecutiveLossCount = new Map<string, number>();
+const consecutiveLossBlock = new Map<string, number>(); // blockUntil timestamp
+
 function getIntercept(name: string, fallback: number): number {
   return interceptParamsCache.get(name) ?? fallback;
+}
+
+/** aggressiveness 缩放：值越低越保守，越高越激进 */
+function aggrScale(base: number, spread: number): number {
+  const agg = (getIntercept("aggressiveness", 50) ?? 50) / 100; // 0-1
+  return Math.round(base - (agg - 0.5) * spread);
 }
 let shortPauseUntil = 0;
 // 连续止损计数按天衰减：超过24h未新止损则计数减1
@@ -170,6 +179,21 @@ async function executeFullClose(
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
   logger.warn(`  🧊 ${symbol} actualPnlPct=${actualPnlPct.toFixed(2)}% → ${actualPnlPct < 1 ? '冷却' : '不冷却(盈利≥1%)'}`);
+  // 连败追踪：亏则+1, 盈则重置
+  if (actualPnlPct <= 0) {
+    const losses = (consecutiveLossCount.get(symbol) || 0) + 1;
+    consecutiveLossCount.set(symbol, losses);
+    const maxLosses = getIntercept("max_consecutive_losses", 3);
+    if (losses >= maxLosses) {
+      consecutiveLossBlock.set(symbol, Date.now() + 30 * 60000); // 暂停30分钟
+      logger.warn(`🔴 ${symbol} 连续${losses}次亏损≥上限${maxLosses}, 暂停30分钟`);
+    }
+  } else {
+    if (consecutiveLossCount.get(symbol) && (consecutiveLossCount.get(symbol) || 0) >= 1) {
+      consecutiveLossCount.set(symbol, 0);
+      consecutiveLossBlock.delete(symbol);
+    }
+  }
   applyCloseCooldown(symbol, actualPnlPct);
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
@@ -747,6 +771,13 @@ async function aiDecisionCycle() {
         if (openedThisCycle >= MAX_NEW_PER_CYCLE) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "每周期开仓已达上限" }); logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
         // 方向由AI决定，strategy仅给出参考方向
         if (existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "已有持仓" }); logger.info(`已有 ${trade.symbol} 持仓，跳过`); continue; }
+        // 连败阻断: N次连续亏损后暂停该币种 (不等复盘直接拦)
+        if (consecutiveLossBlock.has(trade.symbol) && (consecutiveLossBlock.get(trade.symbol) || 0) > Date.now()) {
+          const until = new Date(consecutiveLossBlock.get(trade.symbol) || 0).toISOString();
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `连败暂停至${until}` });
+          logger.info(`🔴 ${trade.symbol} 连败${consecutiveLossCount.get(trade.symbol) || 0}次, 暂停交易至${until}`);
+          continue;
+        }
         if (existingSymbols.size >= CONFIG.maxPositions) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
         // 止损冷却检查：递增惩罚
         const dynMin = getDynamicCooldown(trade.symbol);
@@ -761,6 +792,10 @@ async function aiDecisionCycle() {
           execLog.push(`cooldown:${trade.symbol}`);
           continue;
         }
+
+        // [层叠日志] 每个信号记录所有过滤节点的通过状态
+        const cascade: string[] = [];
+        const ck = (node: string, pass: boolean) => cascade.push(`${node}:${pass ? "✅" : "❌"}`);
 
         // AI主席置信度过滤：<0.3跳过，0.3-0.5轻仓，0.5-0.7半仓
         const aiScore = Math.round((trade.confidence || 0.5) * 100);
@@ -786,22 +821,26 @@ async function aiDecisionCycle() {
 
         // ===== 硬性信号过滤：AI复盘反复验证的亏损规律，代码级阻断 =====
         // ① 回测延续率<55%且反转<55%的币种不追（AI证实: AAVE延续率仅50%导致4败）
-        const contMin = interceptParamsCache.get("cont_accuracy_min") ?? 55;
-        const revMin = interceptParamsCache.get("rev_accuracy_min") ?? 55;
-        if (sa?.backtest && sa.backtest.contAccuracy < contMin && sa.backtest.revAccuracy < revMin) {
-          const msg = `⏭️ ${trade.symbol} 回测延续${sa.backtest.contAccuracy.toFixed(0)}%反转${sa.backtest.revAccuracy.toFixed(0)}%均<${contMin}%，跳过`;
+        const contMin = aggrScale(getIntercept("cont_accuracy_min", 55), 20);
+        const revMin = aggrScale(getIntercept("rev_accuracy_min", 55), 15);
+        const btPass = !(sa?.backtest && sa.backtest.contAccuracy != null && sa.backtest.contAccuracy < contMin && sa.backtest.revAccuracy != null && sa.backtest.revAccuracy < revMin);
+        ck("backtest", btPass);
+        if (!btPass) {
+          const msg = `⏭️ ${trade.symbol} 回测延续${sa?.backtest?.contAccuracy?.toFixed(0)}%反转${sa?.backtest?.revAccuracy?.toFixed(0)}%均<${contMin}%，跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `回测双低` });
           logger.info(msg); execLog.push(msg); continue;
         }
-        // ② AI评分<阈值直接跳（默认40, 可由 intercept_params 热调整）
-        const aiScoreMin = interceptParamsCache.get("ai_score_min") ?? 40;
+        // ② AI评分<阈值直接跳
+        const aiScoreMin = aggrScale(getIntercept("ai_score_min", 40), 20);
+        ck(`AI(${aiScore})`, aiScore >= aiScoreMin);
         if (aiScore < aiScoreMin) {
           const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<${aiScoreMin}，质量不足跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分${aiScore}<40` });
           logger.info(msg); execLog.push(msg); continue;
         }
         const mq = sa?.sentiment?.marketQuality ?? 50;
-        const mqMin = interceptParamsCache.get("market_quality_min") ?? 20;
+        const mqMin = aggrScale(getIntercept("market_quality_min", 20), 10);
+        ck(`MQ(${mq})`, mq >= mqMin);
         if (mq < mqMin) {
           const msg = `⏭️ ${trade.symbol} 行情质量${mq}<${mqMin}，跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${mq})` });
@@ -824,7 +863,8 @@ async function aiDecisionCycle() {
           const entryScore = trade.action === "buy"
             ? sa.entryQuality.longEntryScore
             : sa.entryQuality.shortEntryScore;
-          const eqMin = interceptParamsCache.get("entry_quality_min") ?? 35;
+          const eqMin = aggrScale(getIntercept("entry_quality_min", 35), 15);
+          ck(`EQ(${trade.action})`, entryScore >= eqMin);
           if (entryScore < eqMin) {
             const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<${eqMin}，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
@@ -867,6 +907,9 @@ async function aiDecisionCycle() {
           logger.info(`⏸️ ${trade.symbol} ${msg}，跳过`);
           continue;
         }
+
+        // [CASCADE] 每信号输出完整过滤路径
+        logger.info(`  [CASCADE] ${trade.symbol} ${trade.action}: ${cascade.join(" ")}`);
 
         const aiRsn = trade.reason || "无AI分析";
         const aiSc = aiScore;

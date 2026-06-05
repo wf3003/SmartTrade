@@ -412,6 +412,12 @@ export function getRecentBacktestLogs(symbol: string, limit: number = 30) {
   return db.prepare("SELECT * FROM backtest_logs WHERE symbol = ? ORDER BY id DESC LIMIT ?").all(symbol, limit);
 }
 
+/** 更新回测日志的校准字段 */
+export function updateBacktestCalibration(backtestId: number, matchRate: number): void {
+  db.prepare("UPDATE backtest_logs SET confidence = ? WHERE id = ?")
+    .run(matchRate, backtestId);
+}
+
 // ========== 复盘反馈参数持久化 ==========
 // feedback_state 表: 单行 JSON 存储 symbolScoreMult / signalScorePenalty / 标量参数
 // 确保进程重启后反馈不丢失
@@ -643,6 +649,11 @@ export function seedInterceptParams(): void {
     ["cooldown_first_min", 30, "首次止损冷却分钟"],
     ["cooldown_second_min", 60, "二次止损冷却分钟"],
     ["cooldown_third_min", 240, "三次+止损冷却分钟"],
+    ["regime_osc_threshold", 18, "纯震荡ADX上限"],
+    ["regime_weak_threshold", 25, "弱趋势ADX上限"],
+    ["regime_strong_threshold", 40, "强趋势ADX下限"],
+    ["aggressiveness", 50, "全局激进程度(0-100)"],
+    ["max_consecutive_losses", 3, "连续亏损上限(超此数暂停币种)"],
   ];
   const now = new Date().toISOString();
   const ins = db.prepare("INSERT INTO intercept_params (param_name,param_value,param_default,description,last_adjusted) VALUES (?,?,?,?,?)");
@@ -687,6 +698,11 @@ export function getInterceptParams(): Map<string, number> {
   m.set("cooldown_first_min", m.get("cooldown_first_min") ?? 30);
   m.set("cooldown_second_min", m.get("cooldown_second_min") ?? 60);
   m.set("cooldown_third_min", m.get("cooldown_third_min") ?? 240);
+  m.set("regime_osc_threshold", m.get("regime_osc_threshold") ?? 18);
+  m.set("regime_weak_threshold", m.get("regime_weak_threshold") ?? 25);
+  m.set("regime_strong_threshold", m.get("regime_strong_threshold") ?? 40);
+  m.set("aggressiveness", m.get("aggressiveness") ?? 50);
+  m.set("max_consecutive_losses", m.get("max_consecutive_losses") ?? 3);
   return m;
 }
 

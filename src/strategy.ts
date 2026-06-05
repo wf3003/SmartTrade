@@ -26,13 +26,16 @@ function adxDesc(adx: number): string {
 
 /** 行情分级：六类 */
 function classifyRegime(adx: number, dailyUp: boolean, price: number, ema20: number, ema50: number): string {
-  if (adx < 18) return "纯震荡";
-  if (adx < 25) {
+  const osc = interceptParamsCache.get("regime_osc_threshold") ?? 18;
+  const weak = interceptParamsCache.get("regime_weak_threshold") ?? 25;
+  const strong = interceptParamsCache.get("regime_strong_threshold") ?? 40;
+  if (adx < osc) return "纯震荡";
+  if (adx < weak) {
     if (dailyUp && price > ema20) return "震荡偏多";
     if (!dailyUp && price < ema20) return "震荡偏空";
     return "纯震荡";
   }
-  if (adx < 40) return dailyUp ? "弱趋势多" : "弱趋势空";
+  if (adx < strong) return dailyUp ? "弱趋势多" : "弱趋势空";
   return dailyUp ? "强趋势多" : "强趋势空";
 }
 
