@@ -646,7 +646,6 @@ export function seedInterceptParams(): void {
     ["lev_vol_mult_low", 150, "低波动杠杆乘数%"],
     ["max_side_margin_pct", 40, "同方向保证金上限%"],
     ["profit_protect_retrace_pct", 25, "浮盈全平回撤线%"],
-    ["profit_partial_retrace_pct", 45, "浮盈部分锁利回撤线%"],
     ["trail_pnl_atr_mult", 150, "跟踪止盈ATR倍数(百分数, 如150=1.5x)"],
     ["cooldown_first_min", 30, "首次止损冷却分钟"],
     ["cooldown_second_min", 60, "二次止损冷却分钟"],
@@ -697,7 +696,6 @@ export function getInterceptParams(): Map<string, number> {
   // 风控
   m.set("max_side_margin_pct", m.get("max_side_margin_pct") ?? 40);
   m.set("profit_protect_retrace_pct", m.get("profit_protect_retrace_pct") ?? 25);
-  m.set("profit_partial_retrace_pct", m.get("profit_partial_retrace_pct") ?? 45);
   m.set("trail_pnl_atr_mult", m.get("trail_pnl_atr_mult") ?? 150);
   m.set("cooldown_first_min", m.get("cooldown_first_min") ?? 30);
   m.set("cooldown_second_min", m.get("cooldown_second_min") ?? 60);

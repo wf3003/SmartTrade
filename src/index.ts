@@ -473,15 +473,7 @@ async function monitorPositions() {
           }
           continue;
         }
-        if (profitProtect?.closeHalf && pos.qty > 1) {
-          const halfQty = Math.ceil(pos.qty / 2);
-          logger.warn(`✂️ ${profitProtect.reason} | ${pos.symbol} (平${halfQty}张)`);
-          try {
-            await executePartialClose(pos.symbol, pos.side, halfQty, 50, null);
-          } catch (e: any) {
-            logger.error(`部分锁利失败 ${pos.symbol}: ${e.message}`);
-          }
-        }
+
       }
 
       // 跟踪止盈已由浮盈保护替代，不再需要
