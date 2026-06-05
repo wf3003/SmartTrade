@@ -15,7 +15,7 @@
  * - 评估结果作为 independent_snapshots 的补充，一起参与统计。
  */
 import { logger } from "./logger";
-import { getClosedSnapshots, getUnevaluatedDecisions, insertDecisionEvaluation, upsertOptRule, insertRulePerformance, getRulePerformanceHistory, disableOptRule } from "./db";
+import { db, getClosedSnapshots, getUnevaluatedDecisions, insertDecisionEvaluation, upsertOptRule, getActiveOptRules, insertRulePerformance, getRulePerformanceHistory, disableOptRule } from "./db";
 
 interface Segment {
   label: string;
@@ -353,41 +353,28 @@ export function discoverComboPatterns(): number {
       const i1r = parseInt(parts[1]);
       const i2r = parseInt(parts[3]);
       try {
-        upsertOptRule({
-          target: "score",
-          regime: undefined,
-          indicator: parts[0],
-          operator: "between",
-          val1: i1r === 0 ? -Infinity : i1r === 1 ? p33_1 : p66_1,
-          val2: i1r === 0 ? p33_1 : i1r === 1 ? p66_1 : Infinity,
-          impact_type: wr > baseline ? "add" : "multiply",
+        // 用 -999 / 9999 作为边界哨兵值（替代 -Infinity/Infinity，SQLite 无法可靠存储 JS Infinity）
+        const SENTINEL_LOW = -999;
+        const SENTINEL_HIGH = 9999;
+        // 只调用一次 upsertOptRule，不再冗余调用
+        const comboVals = {
+          target: "score" as const, regime: undefined,
+          indicator: parts[0], operator: "between" as const,
+          val1: i1r === 0 ? SENTINEL_LOW : i1r === 1 ? p33_1 : p66_1,
+          val2: i1r === 0 ? p33_1 : i1r === 1 ? p66_1 : SENTINEL_HIGH,
+          impact_type: (wr > baseline ? "add" : "multiply") as "add" | "multiply",
           impact_value: wr > baseline ? Math.min(10, Math.round((wr - baseline) * 40))
             : Math.max(0.3, 1.0 - (baseline - wr) * 1.5),
           sample_size: e.total,
           win_rate: Math.round(wr * 10000) / 100,
           baseline_win_rate: Math.round(baseline * 10000) / 100,
-        });
-        // 更新 combo 第二个指标字段
-        const ruleId = upsertOptRule({
-          target: "score",
-          regime: undefined,
-          indicator: parts[0],
-          operator: "between",
-          val1: i1r === 0 ? -Infinity : i1r === 1 ? p33_1 : p66_1,
-          val2: i1r === 0 ? p33_1 : i1r === 1 ? p66_1 : Infinity,
-          impact_type: wr > baseline ? "add" : "multiply",
-          impact_value: wr > baseline ? Math.min(10, Math.round((wr - baseline) * 40))
-            : Math.max(0.3, 1.0 - (baseline - wr) * 1.5),
-          sample_size: e.total,
-          win_rate: Math.round(wr * 10000) / 100,
-          baseline_win_rate: Math.round(baseline * 10000) / 100,
-        }) as number;
-        // 手动写入 combo 字段
+        };
+        const ruleId = upsertOptRule(comboVals) as number;
+        // 写入 combo 第二指标
         try {
-          const { db } = require("./db");
           db.prepare("UPDATE opt_rules SET indicator2=?, op2='between', val3=?, val4=? WHERE id=?")
-            .run(parts[2], i2r === 0 ? -Infinity : i2r === 1 ? p33_2 : p66_2,
-              i2r === 0 ? p33_2 : i2r === 1 ? p66_2 : Infinity, ruleId);
+            .run(parts[2], i2r === 0 ? SENTINEL_LOW : i2r === 1 ? p33_2 : p66_2,
+              i2r === 0 ? p33_2 : i2r === 1 ? p66_2 : SENTINEL_HIGH, ruleId);
         } catch {}
         created++;
       } catch {}
@@ -404,7 +391,6 @@ export function discoverComboPatterns(): number {
  * 若与规则声称的 win_rate 持续偏差 > 20%，则降权或禁用。
  */
 export function detectRuleDrift(): number {
-  const { getActiveOptRules } = require("./db");
   const rules = getActiveOptRules() as any[];
   if (rules.length === 0) return 0;
 
@@ -425,7 +411,7 @@ export function detectRuleDrift(): number {
       let m1 = false;
       if (rule.operator === "lt" && v1 < rule.val1) m1 = true;
       else if (rule.operator === "gt" && v1 > rule.val1) m1 = true;
-      else if (rule.operator === "between" && v1 >= (rule.val1 === -Infinity ? -1e9 : rule.val1) && v1 <= (rule.val2 === Infinity ? 1e9 : rule.val2)) m1 = true;
+      else if (rule.operator === "between" && v1 >= (rule.val1 <= -998 ? -1e9 : rule.val1) && v1 <= (rule.val2 >= 9998 ? 1e9 : rule.val2)) m1 = true;
       else if (rule.operator === "lte" && v1 <= rule.val1) m1 = true;
       else if (rule.operator === "gte" && v1 >= rule.val1) m1 = true;
       if (!m1) return false;

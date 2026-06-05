@@ -1058,7 +1058,20 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
           const comboCount = discoverComboPatterns();
           if (comboCount > 0) logger.info(`🔍 Combo发现: ${comboCount} 个双指标组合规律`);
         } catch (e: any) { logger.warn(`[Combo] 异常: ${e.message}`); }
-        // 3. 单指标优化
+        // 3. 行情变迁检测：ADX 趋势变化 >30% 则清空规则重学
+        try {
+          const adxVals = Array.from(indicatorCache.values()).filter(x => x.adx_1h > 0);
+          if (adxVals.length > 0) {
+            const avgAdx1h = adxVals.reduce((s, x) => s + x.adx_1h, 0) / adxVals.length;
+            const avgAdx1d = adxVals.reduce((s, x) => s + x.adx_1d, 0) / adxVals.length;
+            const shift = detectRegimeShift(avgAdx1h, avgAdx1d);
+            if (shift.shifted) {
+              logger.info(`🌋 ${shift.detail} — 行情变迁，清空规则以重新学习`);
+              resetDynamicParams();
+            }
+          }
+        } catch (e: any) { logger.warn(`[RegimeShift] 异常: ${e.message}`); }
+        // 4. 单指标优化
         runOptimizer().then(rulesCreated => {
           if (rulesCreated > 0) {
             loadOptRulesFromDb().then(() => logger.info(`⚙️ 加载 ${optRulesCache.length} 条优化规则到缓存`));

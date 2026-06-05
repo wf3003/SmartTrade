@@ -122,7 +122,7 @@ export function applyOptRules(
       let m2 = false;
       if (rule.op2 === "lt" && v2 < rule.val3) m2 = true;
       else if (rule.op2 === "gt" && v2 > rule.val3) m2 = true;
-      else if (rule.op2 === "between" && v2 >= (rule.val3 === -1e9 ? -Infinity : rule.val3) && v2 <= (rule.val4 === 1e9 ? Infinity : rule.val4)) m2 = true;
+      else if (rule.op2 === "between" && v2 >= (rule.val3 <= -998 ? -1e9 : rule.val3) && v2 <= (rule.val4 >= 9998 ? 1e9 : rule.val4)) m2 = true;
       else if (rule.op2 === "lte" && v2 <= rule.val3) m2 = true;
       else if (rule.op2 === "gte" && v2 >= rule.val3) m2 = true;
       if (!m2) continue;
@@ -209,7 +209,7 @@ export function getPositionRuleMultiplier(
       if (v2 === null) continue;
       let m2 = false;
       if (rule.op2 === "lt" && v2 < rule.val3) m2 = true;
-      else if (rule.op2 === "between" && v2 >= (rule.val3 === -1e9 ? -Infinity : rule.val3) && v2 <= (rule.val4 === 1e9 ? Infinity : rule.val4)) m2 = true;
+      else if (rule.op2 === "between" && v2 >= (rule.val3 <= -998 ? -1e9 : rule.val3) && v2 <= (rule.val4 >= 9998 ? 1e9 : rule.val4)) m2 = true;
       else if (rule.op2 === "gt" && v2 > rule.val3) m2 = true;
       if (!m2) continue;
     }
