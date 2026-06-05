@@ -624,7 +624,7 @@ export function seedInterceptParams(): void {
     ["eq_body_big_bear_lp", 4, "阴线实体大做多扣分"],
     ["eq_vol_surge_bull_lb", 5, "放量上涨做多加分"],
     ["eq_vol_surge_bear_sb", 5, "放量下跌做空加分"],
-    ["eq_momentum_decay_p", 15, "动量衰减扣分"],
+    ["eq_momentum_decay_p", 12, "动量衰减扣分"],
     ["eq_tf_daily_weight", 150, "日线权重(百分数, 如150=1.5x)"],
     ["strategy_adx_override", 58, "ADX>此值强制延续策略"],
     ["sl_atr_mult", 200, "止损=ATR×此值/100 (即2.0x)"],

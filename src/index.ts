@@ -964,6 +964,14 @@ async function aiDecisionCycle() {
           logger.info(`   opt_rules 仓位乘数x${optPosMult.toFixed(2)}: ${origPct}%→${trade.amountPercent}%`);
         }
 
+        // 仓位最小值保护：不管削减多少层，不低于 base/4
+        const minPct = Math.max(1, Math.round(CONFIG.basePositionPct / 4));
+        if (trade.amountPercent < minPct) {
+          const origPct = trade.amountPercent;
+          trade.amountPercent = minPct;
+          logger.info(`   仓位触及最小值保护: ${origPct}%→${minPct}%`);
+        }
+
         logger.warn(`🤖 AI 开仓: ${trade.action} ${trade.symbol} | ${trade.leverage}x | ${trade.amountPercent}%`);
         logger.info(`   AI评分:${optResult.score} ${aiRsn}`);
         logger.info(`   快照 RSI:${snap.rsi} ATR:${snap.atrPct}% 费率:${snap.fundingRatePct}% 量:${snap.vol24hM}M`);
@@ -1093,7 +1101,7 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
           for (const adj of parsed.adjustIntercepts) {
             if (adj.param && typeof adj.param === "string" && typeof adj.value === "number") {
               const cur = interceptParamsCache.get(adj.param);
-              if (cur !== undefined && Math.abs(adj.value - cur) / cur > 0.15) {
+              if (cur !== undefined && Math.abs(adj.value - cur) / cur > 0.05) {
                 // 只接受 > 15% 的变动，防微小抖动
                 const { updateInterceptParam } = await import("./db");
                 updateInterceptParam(adj.param, Math.round(adj.value));
