@@ -784,8 +784,10 @@ async function aiDecisionCycle() {
 
         // ===== 硬性信号过滤：AI复盘反复验证的亏损规律，代码级阻断 =====
         // ① 回测延续率<55%且反转<55%的币种不追（AI证实: AAVE延续率仅50%导致4败）
-        if (sa?.backtest && sa.backtest.contAccuracy < 55 && sa.backtest.revAccuracy < 55) {
-          const msg = `⏭️ ${trade.symbol} 回测延续${sa.backtest.contAccuracy.toFixed(0)}%反转${sa.backtest.revAccuracy.toFixed(0)}%均<55%，跳过`;
+        const contMin = interceptParamsCache.get("cont_accuracy_min") ?? 55;
+        const revMin = interceptParamsCache.get("rev_accuracy_min") ?? 55;
+        if (sa?.backtest && sa.backtest.contAccuracy < contMin && sa.backtest.revAccuracy < revMin) {
+          const msg = `⏭️ ${trade.symbol} 回测延续${sa.backtest.contAccuracy.toFixed(0)}%反转${sa.backtest.revAccuracy.toFixed(0)}%均<${contMin}%，跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `回测双低` });
           logger.info(msg); execLog.push(msg); continue;
         }

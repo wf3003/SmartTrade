@@ -4,7 +4,7 @@
  */
 import { CONFIG } from "./config";
 import { openai } from "./ai-client";
-import { scoringAdvice } from "./state";
+import { scoringAdvice, interceptParamsCache } from "./state";
 
 export interface AiOpinion {
   score: number;
@@ -52,6 +52,9 @@ ${signalLines}
 
 【实时回测评估】
 ${backtestData || "无回测数据"}
+
+【当前拦截参数】
+${Array.from(interceptParamsCache.entries()).map(([k,v])=>`${k}=${v}`).join(", ")}
 
 ${scoringAdvice ? `【评分校准建议（基于近期复盘）】
 ${scoringAdvice}

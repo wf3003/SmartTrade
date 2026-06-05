@@ -10,6 +10,7 @@
  * 5. 成交量确认 — 放量突破可信, 缩量突破假动作
  */
 import { calcIndicators, convertCandles } from "../indicators";
+import { interceptParamsCache } from "../state";
 
 export interface EntryQuality {
   symbol: string;
@@ -90,61 +91,63 @@ export function assessEntryQuality(
     };
   }
 
+  const eq = (n: string, f: number) => interceptParamsCache.get(n) ?? f;
   let longScore = 50;
   const longWarnings: string[] = [];
   let shortScore = 50;
   const shortWarnings: string[] = [];
 
   for (const s of snapshots) {
-    const weight = s.tf === "1d" ? 1.5 : 1.0;
+    const w = s.tf === "1d" ? eq("eq_tf_daily_weight", 150) / 100 : 1.0;
 
     // RSI
-    if (s.rsi >= 75) { longScore -= 15 * weight; longWarnings.push(`${s.tf}RSI${s.rsi.toFixed(0)}极度超买`); }
-    else if (s.rsi >= 65) { longScore -= 8 * weight; longWarnings.push(`${s.tf}RSI${s.rsi.toFixed(0)}偏高`); }
-    else if (s.rsi <= 25) { longScore += 12 * weight; }
-    else if (s.rsi <= 35) { longScore += 6 * weight; }
+    if (s.rsi >= 75) { longScore -= eq("eq_rsi_extreme_ob_p", 15) * w; longWarnings.push(`${s.tf}RSI${s.rsi.toFixed(0)}极度超买`); }
+    else if (s.rsi >= 65) { longScore -= eq("eq_rsi_mild_ob_p", 8) * w; longWarnings.push(`${s.tf}RSI${s.rsi.toFixed(0)}偏高`); }
+    else if (s.rsi <= 25) { longScore += eq("eq_rsi_extreme_os_lb", 12) * w; }
+    else if (s.rsi <= 35) { longScore += eq("eq_rsi_mild_os_lb", 6) * w; }
 
-    if (s.rsi <= 20) { shortScore -= 15 * weight; shortWarnings.push(`${s.tf}RSI${s.rsi.toFixed(0)}极度超卖`); }
-    else if (s.rsi <= 30) { shortScore -= 8 * weight; shortWarnings.push(`${s.tf}RSI${s.rsi.toFixed(0)}超卖`); }
-    else if (s.rsi >= 70) { shortScore += 10 * weight; }
-    else if (s.rsi >= 60) { shortScore += 5 * weight; }
+    if (s.rsi <= 20) { shortScore -= eq("eq_rsi_extreme_os_sp", 15) * w; shortWarnings.push(`${s.tf}RSI${s.rsi.toFixed(0)}极度超卖`); }
+    else if (s.rsi <= 30) { shortScore -= eq("eq_rsi_mild_os_sp", 8) * w; shortWarnings.push(`${s.tf}RSI${s.rsi.toFixed(0)}超卖`); }
+    else if (s.rsi >= 70) { shortScore += eq("eq_rsi_ob_sb", 10) * w; }
+    else if (s.rsi >= 60) { shortScore += eq("eq_rsi_mild_ob_sb", 5) * w; }
 
     // BB
     const bbL = s.bbPosition >= 75 ? "上轨" : s.bbPosition <= 25 ? "下轨" : "中";
     if (s.bbPosition >= 90) {
-      longScore -= 12 * weight; longWarnings.push(`${s.tf}BB${bbL}追高`);
-      shortScore += 8 * weight;
+      longScore -= eq("eq_bb_extreme_ob_lp", 12) * w; longWarnings.push(`${s.tf}BB${bbL}追高`);
+      shortScore += eq("eq_bb_extreme_ob_sb", 8) * w;
     } else if (s.bbPosition >= 75) {
-      longScore -= 6 * weight; shortScore += 4 * weight;
+      longScore -= eq("eq_bb_mild_ob_lp", 6) * w; shortScore += eq("eq_bb_mild_ob_sb", 4) * w;
     } else if (s.bbPosition <= 10) {
-      longScore += 8 * weight;
-      shortScore -= 12 * weight; shortWarnings.push(`${s.tf}BB${bbL}追空`);
+      longScore += eq("eq_bb_extreme_os_lb", 8) * w;
+      shortScore -= eq("eq_bb_extreme_os_sp", 12) * w; shortWarnings.push(`${s.tf}BB${bbL}追空`);
     } else if (s.bbPosition <= 25) {
-      longScore += 4 * weight; shortScore -= 6 * weight;
+      longScore += eq("eq_bb_mild_os_lb", 4) * w; shortScore -= eq("eq_bb_mild_os_sp", 6) * w;
     }
 
     // EMA
-    if (s.ema20Up) { longScore += 3 * weight; shortScore -= 3 * weight; }
-    else { longScore -= 3 * weight; shortScore += 3 * weight; }
+    if (s.ema20Up) { longScore += eq("eq_ema_up_lb", 3) * w; shortScore -= eq("eq_ema_up_sp", 3) * w; }
+    else { longScore -= eq("eq_ema_up_lb", 3) * w; shortScore += eq("eq_ema_up_sp", 3) * w; }
 
     // K线实体
     if (s.lastCandleBodyPct > 0.6) {
-      if (s.lastCandleDir === "up") shortScore += 4;
-      else if (s.lastCandleDir === "down") longScore -= 4;
+      if (s.lastCandleDir === "up") shortScore += eq("eq_body_big_bull_sb", 4);
+      else if (s.lastCandleDir === "down") longScore -= eq("eq_body_big_bear_lp", 4);
     }
 
     // 成交量
     if (s.volRatio > 1.5) {
-      if (s.lastCandleDir === "up") longScore += 5;
-      else if (s.lastCandleDir === "down") shortScore += 5;
+      if (s.lastCandleDir === "up") longScore += eq("eq_vol_surge_bull_lb", 5);
+      else if (s.lastCandleDir === "down") shortScore += eq("eq_vol_surge_bear_sb", 5);
     }
   }
 
-  // 动量衰减：ADX高但方向分化
+  // 动量衰减
   const dirs = snapshots.map(s => s.ema20Up);
   const allSame = new Set(dirs).size === 1;
   if (snapshots.filter(s => s.adx >= 40).length >= 2 && !allSame) {
-    longScore -= 15; shortScore -= 15;
+    const decay = eq("eq_momentum_decay_p", 15);
+    longScore -= decay; shortScore -= decay;
     longWarnings.push("动量衰减:ADX高但方向分化");
     shortWarnings.push("动量衰减:ADX高但方向分化");
   }

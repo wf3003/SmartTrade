@@ -57,6 +57,11 @@ export let optRulesCache: any[] = [];
 // ===== 拦截参数缓存 =====
 export let interceptParamsCache = new Map<string, number>();
 
+/** 从缓存获取入场质量权重（带默认值回退） */
+export function getEqWeight(name: string, fallback: number): number {
+  return interceptParamsCache.get(name) ?? fallback;
+}
+
 export async function loadInterceptParamsFromDb(): Promise<void> {
   const { getInterceptParams } = await import("./db");
   interceptParamsCache = getInterceptParams();
@@ -82,16 +87,19 @@ export function applyOptRules(
   const logs: string[] = [];
   // 硬编码安全网：始终生效，且区分方向
   // RSI<20 只对做空降权（超卖追空危险），做多不降（抄底合理）
+  // 阈值来自 intercept_params 热参数（复盘可调），兜底默认 20/80
+  const rsiShort = interceptParamsCache.get("rsi_extreme_short") ?? 20;
+  const rsiLong = interceptParamsCache.get("rsi_extreme_long") ?? 80;
   if (side === "short") {
     const v_rsi = getIndicatorValue("rsi_1h", rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);
-    if (v_rsi !== null && v_rsi < 20) { score = Math.round(score * 0.3); logs.push("[硬]RSI<20 做空 ×0.3"); }
+    if (v_rsi !== null && v_rsi < rsiShort) { score = Math.round(score * 0.3); logs.push(`[硬]RSI<${rsiShort} 做空 ×0.3`); }
     const v_fr = getIndicatorValue("funding_rate", rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);
     if (v_fr !== null && v_fr < -0.03) { score = Math.round(score * 0.4); logs.push("[硬]费率<-0.03% 做空 ×0.4"); }
   }
   // RSI>80 只对做多降权（超买追多危险），做空不降（摸顶合理）
   if (side === "long") {
     const v_rsi = getIndicatorValue("rsi_1h", rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);
-    if (v_rsi !== null && v_rsi > 80) { score = Math.round(score * 0.3); logs.push("[硬]RSI>80 做多 ×0.3"); }
+    if (v_rsi !== null && v_rsi > rsiLong) { score = Math.round(score * 0.3); logs.push(`[硬]RSI>${rsiLong} 做多 ×0.3`); }
     const v_fr = getIndicatorValue("funding_rate", rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);
     if (v_fr !== null && v_fr > 0.03) { score = Math.round(score * 0.4); logs.push("[硬]费率>0.03% 做多 ×0.4"); }
   }
