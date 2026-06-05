@@ -1102,7 +1102,7 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
             if (adj.param && typeof adj.param === "string" && typeof adj.value === "number") {
               const cur = interceptParamsCache.get(adj.param);
               if (cur !== undefined && Math.abs(adj.value - cur) / cur > 0.05) {
-                // 只接受 > 15% 的变动，防微小抖动
+                // 只接受 > 5% 的变动，防微小抖动
                 const { updateInterceptParam } = await import("./db");
                 updateInterceptParam(adj.param, Math.round(adj.value));
                 interceptParamsCache.set(adj.param, Math.round(adj.value));
