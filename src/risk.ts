@@ -90,27 +90,43 @@ export interface StopLossResult {
 export function checkProfitProtect(
   peakPnlPct: number,
   currentPnlPct: number,
+  atrPct: number = 0,
+  leverage: number = 1,
 ): { shouldClose: boolean; closeHalf: boolean; reason: string } | null {
   if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
 
+  // ATR跟踪止盈：trailDist = atr% × 杠杆 × trail_mult，至少保护峰值的10%
+  const trailMult = (interceptParamsCache.get("trail_pnl_atr_mult") ?? 150) / 100;
+  const trailDist = atrPct > 0 && leverage > 1
+    ? Math.max(atrPct * leverage * trailMult, peakPnlPct * 0.1)
+    : peakPnlPct * 0.3;
+  const trailLine = peakPnlPct - trailDist;
+
+  // 固定回撤保护线（硬兜底）
   const fullPct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 25) / 100;
   const partialPct = (interceptParamsCache.get("profit_partial_retrace_pct") ?? 45) / 100;
-
   const fullLine = Math.max(peakPnlPct * fullPct, 1.5);
   const partialLine = Math.max(peakPnlPct * partialPct, 2.0);
 
-  if (currentPnlPct < fullLine) {
+  // 取较紧的线：谁先触发用谁
+  const useLine = Math.max(trailLine, fullLine);
+  const usePartialLine = Math.max(
+    atrPct > 0 ? peakPnlPct - trailDist * 0.6 : partialLine,
+    partialLine
+  );
+
+  if (currentPnlPct < useLine) {
     return {
       shouldClose: true,
       closeHalf: false,
-      reason: `浮盈全部保护: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${fullLine.toFixed(1)}%`,
+      reason: `跟踪止盈: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${useLine.toFixed(1)}%(ATR:${trailLine.toFixed(1)}% / 固定:${fullLine.toFixed(1)}%)`,
     };
   }
-  if (currentPnlPct < partialLine && peakPnlPct >= 15) { // 需有足够利润才分批
+  if (currentPnlPct < usePartialLine && peakPnlPct >= 15) {
     return {
       shouldClose: false,
       closeHalf: true,
-      reason: `浮盈部分锁利: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${partialLine.toFixed(1)}%`,
+      reason: `部分锁利: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${usePartialLine.toFixed(1)}%`,
     };
   }
   return null;

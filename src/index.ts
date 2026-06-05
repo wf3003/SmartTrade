@@ -460,7 +460,9 @@ async function monitorPositions() {
       // 【优化】浮盈保护：峰值>3%后回撤过半 → 平仓
       // 在跟踪止盈之前检查（避免浮盈大幅回吐）
       if (peakPnl > 0 && pos.qty > 0) {
-        const profitProtect = checkProfitProtect(peakPnl, pnlPct);
+        const posAtr = (atrCache.get(pos.symbol) || 0.015) * 100;
+        const posLev = pos.leverage || 1;
+        const profitProtect = checkProfitProtect(peakPnl, pnlPct, posAtr, posLev);
         if (profitProtect?.shouldClose) {
           logger.warn(`🔒 ${profitProtect.reason} | ${pos.symbol}`);
           try {
