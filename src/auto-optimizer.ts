@@ -15,7 +15,7 @@
  * - 评估结果作为 independent_snapshots 的补充，一起参与统计。
  */
 import { logger } from "./logger";
-import { getClosedSnapshots, getUnevaluatedDecisions, insertDecisionEvaluation, upsertOptRule } from "./db";
+import { getClosedSnapshots, getUnevaluatedDecisions, insertDecisionEvaluation, upsertOptRule, insertRulePerformance, getRulePerformanceHistory, disableOptRule } from "./db";
 
 interface Segment {
   label: string;
@@ -290,4 +290,214 @@ async function generateSignalTypeRules(snapshots: any[], baselineWr: number): Pr
       } catch {}
     }
   }
+}
+
+// ========== 能力2: 双指标组合规律发现 ==========
+
+/** 需要尝试组合的指标对（对胜率影响最大的组合） */
+const COMBO_PAIRS: [string, string, string, string][] = [
+  ["rsi_1h", "rsi_1h", "adx_1h", "adx_1h"],     // RSI + ADX 组合
+  ["rsi_1h", "rsi_1h", "funding_rate", "funding_rate"], // RSI + 费率
+  ["rsi_1d", "rsi_1d", "adx_1d", "adx_1d"],     // 日线 RSI + ADX
+  ["adx_1h", "adx_1h", "atr_pct", "atr_pct"],   // ADX + 波动率
+  ["rsi_1h", "rsi_1h", "market_quality", "market_quality"], // RSI + 行情质量
+];
+
+/**
+ * 双指标组合搜索：对每对指标做 3×3 网格，找胜率异常的组合区间。
+ * 只返回胜率显著偏离基线（>20%）且样本 >= 5 的组合。
+ */
+export function discoverComboPatterns(): number {
+  const snapshots = getClosedSnapshots(200) as any[];
+  if (snapshots.length < 20) return 0;
+
+  const baseline = snapshots.filter(s => s.result === "win").length / snapshots.length;
+  let created = 0;
+
+  for (const [f1, n1, f2, n2] of COMBO_PAIRS) {
+    // 取有效值并按百分位分 3 档
+    const vals1 = snapshots.map(s => Number(s[f1] ?? s[n1])).filter(v => !isNaN(v)).sort((a,b) => a-b);
+    const vals2 = snapshots.map(s => Number(s[f2] ?? s[n2])).filter(v => !isNaN(v)).sort((a,b) => a-b);
+    if (vals1.length < 20 || vals2.length < 20) continue;
+
+    const p33_1 = vals1[Math.floor(vals1.length / 3)];
+    const p66_1 = vals1[Math.floor(vals1.length * 2 / 3)];
+    const p33_2 = vals2[Math.floor(vals2.length / 3)];
+    const p66_2 = vals2[Math.floor(vals2.length * 2 / 3)];
+
+    // 3×3 grid
+    const grid = new Map<string, { wins: number; total: number }>();
+    for (const s of snapshots) {
+      const v1 = Number(s[f1] ?? s[n1]);
+      const v2 = Number(s[f2] ?? s[n2]);
+      if (isNaN(v1) || isNaN(v2)) continue;
+      const r1 = v1 < p33_1 ? 0 : v1 < p66_1 ? 1 : 2;
+      const r2 = v2 < p33_2 ? 0 : v2 < p66_2 ? 1 : 2;
+      const k = `${n1}_${r1}_${n2}_${r2}`;
+      const e = grid.get(k) || { wins: 0, total: 0 };
+      e.total++;
+      if (s.result === "win") e.wins++;
+      grid.set(k, e);
+    }
+
+    for (const [k, e] of grid) {
+      if (e.total < 5) continue;
+      const wr = e.wins / e.total;
+      if (Math.abs(wr - baseline) < 0.20) continue;
+      const parts = k.split("_");
+      const i1r = parseInt(parts[1]);
+      const i2r = parseInt(parts[3]);
+      try {
+        upsertOptRule({
+          target: "score",
+          regime: undefined,
+          indicator: parts[0],
+          operator: "between",
+          val1: i1r === 0 ? -Infinity : i1r === 1 ? p33_1 : p66_1,
+          val2: i1r === 0 ? p33_1 : i1r === 1 ? p66_1 : Infinity,
+          impact_type: wr > baseline ? "add" : "multiply",
+          impact_value: wr > baseline ? Math.min(10, Math.round((wr - baseline) * 40))
+            : Math.max(0.3, 1.0 - (baseline - wr) * 1.5),
+          sample_size: e.total,
+          win_rate: Math.round(wr * 10000) / 100,
+          baseline_win_rate: Math.round(baseline * 10000) / 100,
+        });
+        // 更新 combo 第二个指标字段
+        const ruleId = upsertOptRule({
+          target: "score",
+          regime: undefined,
+          indicator: parts[0],
+          operator: "between",
+          val1: i1r === 0 ? -Infinity : i1r === 1 ? p33_1 : p66_1,
+          val2: i1r === 0 ? p33_1 : i1r === 1 ? p66_1 : Infinity,
+          impact_type: wr > baseline ? "add" : "multiply",
+          impact_value: wr > baseline ? Math.min(10, Math.round((wr - baseline) * 40))
+            : Math.max(0.3, 1.0 - (baseline - wr) * 1.5),
+          sample_size: e.total,
+          win_rate: Math.round(wr * 10000) / 100,
+          baseline_win_rate: Math.round(baseline * 10000) / 100,
+        }) as number;
+        // 手动写入 combo 字段
+        try {
+          const { db } = require("./db");
+          db.prepare("UPDATE opt_rules SET indicator2=?, op2='between', val3=?, val4=? WHERE id=?")
+            .run(parts[2], i2r === 0 ? -Infinity : i2r === 1 ? p33_2 : p66_2,
+              i2r === 0 ? p33_2 : i2r === 1 ? p66_2 : Infinity, ruleId);
+        } catch {}
+        created++;
+        logger.info(`[Combo] ${parts[0]}(${i1r}) + ${parts[2]}(${i2r}) 胜率${(wr*100).toFixed(0)}%/${e.total}笔 (基线${(baseline*100).toFixed(0)}%)`);
+      } catch {}
+    }
+  }
+  return created;
+}
+
+// ========== 能力3: 概念漂移检测 ==========
+
+/**
+ * 对每条活跃规则，用最近 N 笔符合条件的 trades 计算实际胜率，
+ * 若与规则声称的 win_rate 持续偏差 > 20%，则降权或禁用。
+ */
+export function detectRuleDrift(): number {
+  const { getActiveOptRules } = require("./db");
+  const rules = getActiveOptRules() as any[];
+  if (rules.length === 0) return 0;
+
+  const snapshots = getClosedSnapshots(200) as any[];
+  if (snapshots.length < 10) return 0;
+
+  let driftCount = 0;
+  const now = new Date().toISOString();
+
+  for (const rule of rules) {
+    // 只检查数据驱动的规则（忽略种子规则 sample_size < 5）
+    if ((rule.sample_size || 0) < 5) continue;
+
+    // 找出该规则匹配的最近 snapshots
+    const matches = snapshots.filter(s => {
+      const v1 = Number(s[rule.indicator]);
+      if (isNaN(v1)) return false;
+      let m1 = false;
+      if (rule.operator === "lt" && v1 < rule.val1) m1 = true;
+      else if (rule.operator === "gt" && v1 > rule.val1) m1 = true;
+      else if (rule.operator === "between" && v1 >= (rule.val1 === -Infinity ? -1e9 : rule.val1) && v1 <= (rule.val2 === Infinity ? 1e9 : rule.val2)) m1 = true;
+      else if (rule.operator === "lte" && v1 <= rule.val1) m1 = true;
+      else if (rule.operator === "gte" && v1 >= rule.val1) m1 = true;
+      if (!m1) return false;
+      // combo: 第二指标也需匹配
+      if (rule.indicator2) {
+        const v2 = Number(s[rule.indicator2]);
+        if (isNaN(v2)) return false;
+        if (rule.op2 === "between" && !(v2 >= (rule.val3 === -Infinity ? -1e9 : rule.val3) && v2 <= (rule.val4 === Infinity ? 1e9 : rule.val4))) return false;
+        else if (rule.op2 === "lt" && !(v2 < rule.val3)) return false;
+        else if (rule.op2 === "gt" && !(v2 > rule.val3)) return false;
+      }
+      return true;
+    });
+
+    if (matches.length < 5) continue;
+    const observedWins = matches.filter(s => s.result === "win").length;
+    const observedWr = observedWins / matches.length;
+    const driftScore = (rule.win_rate || 0.5) - observedWr;
+
+    const isDrifting = driftScore > 0.20 && matches.length >= 8;
+    insertRulePerformance({
+      rule_id: rule.id, check_time: now, recent_samples: matches.length,
+      observed_win_rate: Math.round(observedWr * 10000) / 100,
+      expected_win_rate: rule.win_rate ?? 0,
+      drift_score: Math.round(driftScore * 10000) / 100,
+      drift_detected: isDrifting,
+    });
+
+    if (isDrifting) {
+      // 看历史: 连续 3 次漂移才降权
+      const history = getRulePerformanceHistory(rule.id, 3);
+      const recentDrifts = history.filter((h: any) => h.drift_detected).length;
+      if (recentDrifts >= 3) {
+        disableOptRule(rule.id);
+        logger.info(`[Drift] 规则 #${rule.id} (${rule.indicator}${rule.operator}${rule.val1}) 连续${recentDrifts}次漂移 → 禁用`);
+      } else {
+        logger.info(`[Drift] 规则 #${rule.id} (${rule.indicator}${rule.operator}${rule.val1}) 漂移${(driftScore*100).toFixed(0)}% (观察${matches.length}笔/实际${(observedWr*100).toFixed(0)}% vs 预期${((rule.win_rate||0)*100).toFixed(0)}%)`);
+      }
+      driftCount++;
+    }
+  }
+  return driftCount;
+}
+
+// ========== 能力4: 行情类型变迁检测 ==========
+
+/** 全局 ADX 趋势追踪 */
+let regimeAdxHistory: { time: string; avgAdx: number }[] = [];
+
+/**
+ * 检测行情是否在变迁: 计算最近 N 个周期的平均 ADX 对比早期 ADX
+ * 如果变动 > 30%，标记行情 shift
+ */
+export function detectRegimeShift(avgAdx1h: number, avgAdx1d: number): { shifted: boolean; detail: string } {
+  const now = new Date().toISOString();
+  regimeAdxHistory.push({ time: now, avgAdx: avgAdx1h });
+  // 保留最近 30 条
+  if (regimeAdxHistory.length > 30) regimeAdxHistory.shift();
+
+  if (regimeAdxHistory.length < 10) return { shifted: false, detail: "样本不足" };
+
+  const recent = regimeAdxHistory.slice(-10);
+  const early = regimeAdxHistory.slice(0, 10);
+  const recentAvg = recent.reduce((s, x) => s + x.avgAdx, 0) / recent.length;
+  const earlyAvg = early.reduce((s, x) => s + x.avgAdx, 0) / early.length;
+
+  if (earlyAvg === 0) return { shifted: false, detail: "早期 ADX 为 0" };
+
+  const change = (recentAvg - earlyAvg) / earlyAvg;
+  if (Math.abs(change) > 0.30) {
+    const dir = change > 0 ? "趋势增强" : "趋势减弱";
+    const detail = `ADX ${earlyAvg.toFixed(0)} → ${recentAvg.toFixed(0)} (${dir}, 变动${(Math.abs(change)*100).toFixed(0)}%)`;
+    logger.info(`[RegimeShift] ${detail}`);
+    // 清空历史，从新行情重新学习
+    regimeAdxHistory = [];
+    return { shifted: true, detail };
+  }
+
+  return { shifted: false, detail: `ADX 稳定 (${recentAvg.toFixed(0)})` };
 }

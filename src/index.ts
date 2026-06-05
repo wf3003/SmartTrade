@@ -38,7 +38,7 @@ import {
   linkSnapshotToTrade,
   seedDefaultOptRules,
 } from "./db";
-import { runOptimizer, evaluateUnjudgedDecisions } from "./auto-optimizer";
+import { runOptimizer, evaluateUnjudgedDecisions, discoverComboPatterns, detectRuleDrift, detectRegimeShift } from "./auto-optimizer";
 
 const MONITOR_INTERVAL = 5_000;  // 每 5 秒检查持仓（原2秒，降低OKX限频压力）
 const DECISION_INTERVAL = 5 * 60_000; // 每 5 分钟策略决策
@@ -1047,7 +1047,18 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
         } catch (e: any) {
           logger.warn(`[Evaluation] 异常: ${e.message}`);
         }
-        // 运行 optimizer：统计历史数据 → 生成 opt_rules → 刷新缓存
+        // 运行 optimizer chain: 漂移检测 → combo发现 → 单指标优化 → 刷新缓存
+        try {
+          // 1. 概念漂移检测：发现失效规则
+          const driftCount = detectRuleDrift();
+          if (driftCount > 0) logger.info(`📉 规则漂移: ${driftCount} 条规则表现下滑`);
+        } catch (e: any) { logger.warn(`[Drift] 异常: ${e.message}`); }
+        try {
+          // 2. 双指标组合发现: 多因子规律
+          const comboCount = discoverComboPatterns();
+          if (comboCount > 0) logger.info(`🔍 Combo发现: ${comboCount} 个双指标组合规律`);
+        } catch (e: any) { logger.warn(`[Combo] 异常: ${e.message}`); }
+        // 3. 单指标优化
         runOptimizer().then(rulesCreated => {
           if (rulesCreated > 0) {
             loadOptRulesFromDb().then(() => logger.info(`⚙️ 加载 ${optRulesCache.length} 条优化规则到缓存`));

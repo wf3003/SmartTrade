@@ -107,6 +107,18 @@ export function applyOptRules(
     else if (rule.operator === "lte" && v <= rule.val1) matches = true;
     else if (rule.operator === "gte" && v >= rule.val1) matches = true;
     if (!matches) continue;
+    // combo: 第二指标也需同时满足
+    if (rule.indicator2) {
+      const v2 = getIndicatorValue(rule.indicator2, rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);
+      if (v2 === null) continue;
+      let m2 = false;
+      if (rule.op2 === "lt" && v2 < rule.val3) m2 = true;
+      else if (rule.op2 === "gt" && v2 > rule.val3) m2 = true;
+      else if (rule.op2 === "between" && v2 >= (rule.val3 === -1e9 ? -Infinity : rule.val3) && v2 <= (rule.val4 === 1e9 ? Infinity : rule.val4)) m2 = true;
+      else if (rule.op2 === "lte" && v2 <= rule.val3) m2 = true;
+      else if (rule.op2 === "gte" && v2 >= rule.val3) m2 = true;
+      if (!m2) continue;
+    }
     if (rule.target === "score" || rule.target === "all") {
       if (rule.impact_type === "multiply") score = Math.round(score * rule.impact_value);
       else if (rule.impact_type === "subtract") score -= rule.impact_value;
@@ -175,6 +187,16 @@ export function getPositionRuleMultiplier(
     else if (rule.operator === "between" && v >= rule.val1 && v <= (rule.val2 ?? rule.val1)) matches = true;
     else if (rule.operator === "lte" && v <= rule.val1) matches = true;
     else if (rule.operator === "gte" && v >= rule.val1) matches = true;
+    if (!matches) continue;
+    if (rule.indicator2) {
+      const v2 = getIndicatorValue(rule.indicator2, rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);
+      if (v2 === null) continue;
+      let m2 = false;
+      if (rule.op2 === "lt" && v2 < rule.val3) m2 = true;
+      else if (rule.op2 === "between" && v2 >= (rule.val3 === -1e9 ? -Infinity : rule.val3) && v2 <= (rule.val4 === 1e9 ? Infinity : rule.val4)) m2 = true;
+      else if (rule.op2 === "gt" && v2 > rule.val3) m2 = true;
+      if (!m2) continue;
+    }
     if (matches && rule.impact_type === "multiply") mult *= rule.impact_value;
   }
   return mult;

@@ -90,6 +90,10 @@ try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_pnl REAL DEFAULT 0");
 try { db.exec("ALTER TABLE trades ADD COLUMN parent_id INTEGER DEFAULT NULL"); } catch {}
 try { db.exec("ALTER TABLE indicator_snapshots ADD COLUMN regime TEXT DEFAULT 'unknown'"); } catch {}
 try { db.exec("ALTER TABLE opt_rules ADD COLUMN regime TEXT DEFAULT 'all'"); } catch {}
+try { db.exec("ALTER TABLE opt_rules ADD COLUMN indicator2 TEXT"); } catch {}
+try { db.exec("ALTER TABLE opt_rules ADD COLUMN op2 TEXT"); } catch {}
+try { db.exec("ALTER TABLE opt_rules ADD COLUMN val3 REAL"); } catch {}
+try { db.exec("ALTER TABLE opt_rules ADD COLUMN val4 REAL"); } catch {}
 // 回测日志（每个决策周期，每个币种一条）
 db.exec(`
   CREATE TABLE IF NOT EXISTS backtest_logs (
@@ -160,8 +164,24 @@ db.exec(`
     win_rate REAL,
     baseline_win_rate REAL,
     active INTEGER DEFAULT 1,
+    -- combo: 第二个指标 (NULL = 单指标规则)
+    indicator2 TEXT,
+    op2 TEXT,
+    val3 REAL,
+    val4 REAL,
     created_at TEXT,
     updated_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS rule_performance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id INTEGER NOT NULL,
+    check_time TEXT NOT NULL,
+    recent_samples INTEGER DEFAULT 0,
+    observed_win_rate REAL,
+    expected_win_rate REAL,
+    drift_score REAL DEFAULT 0,
+    drift_detected INTEGER DEFAULT 0
   );
 `);
 logger.info("数据库已连接: " + dbPath);
@@ -552,6 +572,25 @@ export function getActiveOptRules(): any[] {
 export function disableOptRule(id: number): void {
   db.prepare("UPDATE opt_rules SET active = 0, updated_at = ? WHERE id = ?")
     .run(new Date().toISOString(), id);
+}
+
+// ========== rule_performance (漂移检测) CRUD ==========
+export function insertRulePerformance(p: {
+  rule_id: number; check_time: string; recent_samples: number;
+  observed_win_rate: number; expected_win_rate: number;
+  drift_score: number; drift_detected: boolean;
+}): void {
+  db.prepare(`
+    INSERT INTO rule_performance (rule_id, check_time, recent_samples, observed_win_rate, expected_win_rate, drift_score, drift_detected)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(p.rule_id, p.check_time, p.recent_samples, p.observed_win_rate, p.expected_win_rate, p.drift_score, p.drift_detected ? 1 : 0);
+}
+
+/** 获取某条规则最近 N 次漂移检测结果 */
+export function getRulePerformanceHistory(rule_id: number, limit: number = 5): any[] {
+  return db.prepare(
+    "SELECT * FROM rule_performance WHERE rule_id = ? ORDER BY id DESC LIMIT ?"
+  ).all(rule_id, limit) as any[];
 }
 
 // ========== decision_evaluations CRUD ==========
