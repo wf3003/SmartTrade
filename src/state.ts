@@ -54,6 +54,14 @@ export const signalScorePenalty = new Map<string, number>();
 
 // ===== opt_rules 缓存（从 DB 加载，复盘后刷新） =====
 export let optRulesCache: any[] = [];
+// ===== 拦截参数缓存 =====
+export let interceptParamsCache = new Map<string, number>();
+
+export async function loadInterceptParamsFromDb(): Promise<void> {
+  const { getInterceptParams } = await import("./db");
+  interceptParamsCache = getInterceptParams();
+  logger.info(`⚙️ 已加载 ${interceptParamsCache.size} 个拦截参数`);
+}
 
 /** 从 DB 加载规则到缓存 */
 export async function loadOptRulesFromDb(): Promise<void> {

@@ -15,7 +15,7 @@ import { getMarketReport } from "./agent";
 import { checkExtremeDeviation, calcMACD, calcIndicators, convertCandles } from "./indicators";
 import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, indicatorCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward, applyOptRules, getPositionRuleMultiplier, optRulesCache, loadOptRulesFromDb } from "./state";
+import { setLatestReport, atrCache, rsiCache, indicatorCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward, applyOptRules, getPositionRuleMultiplier, optRulesCache, loadOptRulesFromDb, interceptParamsCache, loadInterceptParamsFromDb } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats, buildDecisionAnalysis } from "./ai-review";
 import { 
@@ -37,6 +37,7 @@ import {
   updateSnapshotResult,
   linkSnapshotToTrade,
   seedDefaultOptRules,
+  seedInterceptParams,
 } from "./db";
 import { runOptimizer, evaluateUnjudgedDecisions, discoverComboPatterns, detectRuleDrift, detectRegimeShift } from "./auto-optimizer";
 
@@ -284,7 +285,9 @@ async function main() {
   // 如果是全新部署，写入默认规则
   const seeded = seedDefaultOptRules();
   if (seeded > 0) logger.info(`⚙️ 写入 ${seeded} 条默认优化规则`);
+  seedInterceptParams();
   await loadOptRulesFromDb();
+  await loadInterceptParamsFromDb();
   // 强制覆盖硬性惩罚（追空-8分），不受旧持久化数据影响
   ensureHardPenalties();
   // 恢复连续止损计数（不复位冷却惩罚）
@@ -786,15 +789,17 @@ async function aiDecisionCycle() {
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `回测双低` });
           logger.info(msg); execLog.push(msg); continue;
         }
-        // ② AI评分<40直接跳（AI证实: 评分29的信号-7.9%亏损）
-        if (aiScore < 40) {
-          const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<40，质量不足跳过`;
+        // ② AI评分<阈值直接跳（默认40, 可由 intercept_params 热调整）
+        const aiScoreMin = interceptParamsCache.get("ai_score_min") ?? 40;
+        if (aiScore < aiScoreMin) {
+          const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<${aiScoreMin}，质量不足跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分${aiScore}<40` });
           logger.info(msg); execLog.push(msg); continue;
         }
         const mq = sa?.sentiment?.marketQuality ?? 50;
-        if (mq < 20) {
-          const msg = `⏭️ ${trade.symbol} 行情质量${mq}<20，跳过`;
+        const mqMin = interceptParamsCache.get("market_quality_min") ?? 20;
+        if (mq < mqMin) {
+          const msg = `⏭️ ${trade.symbol} 行情质量${mq}<${mqMin}，跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${mq})` });
           logger.info(msg);
           execLog.push(msg);
@@ -813,15 +818,16 @@ async function aiDecisionCycle() {
           const entryScore = trade.action === "buy"
             ? sa.entryQuality.longEntryScore
             : sa.entryQuality.shortEntryScore;
-          if (entryScore < 35) {
-            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<35，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
+          const eqMin = interceptParamsCache.get("entry_quality_min") ?? 35;
+          if (entryScore < eqMin) {
+            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<${eqMin}，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
             logger.info(msg);
             execLog.push(msg);
             continue;
-          } else if (entryScore < 55) {
+          } else if (entryScore < eqMin + 20) {
             trade.amountPercent = Math.round(trade.amountPercent * 0.5);
-            logger.info(`   ${trade.symbol} 入场质量${entryScore}<55，仓位减半至${trade.amountPercent}%`);
+            logger.info(`   ${trade.symbol} 入场质量${entryScore}<${eqMin+20}，仓位减半至${trade.amountPercent}%`);
           } else if (sa.entryQuality.suggestion === "unfavorable") {
             const msg = `⏭️ ${trade.symbol} 入场质量评级 unfavorable，当前周期不开新仓`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "入场质量unfavorable" });
@@ -1029,7 +1035,23 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
         if (Array.isArray(parsed.suggestions)) {
           applyReviewSuggestions(parsed.suggestions);
         }
-        // 4. AI评分校准建议 → 存入状态供下次决策参考
+        // 4. AI建议调整拦截参数
+        if (Array.isArray(parsed.adjustIntercepts)) {
+          for (const adj of parsed.adjustIntercepts) {
+            if (adj.param && typeof adj.param === "string" && typeof adj.value === "number") {
+              const cur = interceptParamsCache.get(adj.param);
+              if (cur !== undefined && Math.abs(adj.value - cur) / cur > 0.15) {
+                // 只接受 > 15% 的变动，防微小抖动
+                const { updateInterceptParam } = await import("./db");
+                updateInterceptParam(adj.param, Math.round(adj.value));
+                interceptParamsCache.set(adj.param, Math.round(adj.value));
+                logger.info(`⚙️ AI调整拦截参数: ${adj.param} ${cur}→${Math.round(adj.value)} (${adj.reason || ""})`);
+              }
+            }
+          }
+          await loadInterceptParamsFromDb();
+        }
+        // 5. AI评分校准建议 → 存入状态供下次决策参考
         if (parsed.scoringAdvice && typeof parsed.scoringAdvice === "string") {
           const state = await import("./state");
           state.scoringAdvice = parsed.scoringAdvice;

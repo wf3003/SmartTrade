@@ -86,7 +86,8 @@ ${symbolStats}
   "suggestions": ["具体优化建议"],
   "blockSignals": "哪些信号需要降分？为什么？(只降分不禁止)",
   "blockSymbols": ["BCH/USDT", "SUI/USDT"],
-  "scoringAdvice": "基于AI决策历史，哪些类型的市场环境AI评分偏高/偏低？应该怎么校准？(如:日线强空+小周期RSI超卖时AI追空评分应降低20)"
+  "scoringAdvice": "基于AI决策历史，哪些类型的市场环境AI评分偏高/偏低？应该怎么校准？",
+  "adjustIntercepts": "基于近期被拦截的交易, 是否需要调整拦截阈值？例如: entry_quality_min从35降到30(因为多次入场质量30-34的交易后来证明是盈利的); 或 ai_score_min从40升到50(因为40-50区间多次亏损)。格式: [{param:ai_score_min, value:50, reason:...}] 如无建议则输出空数组[]"
 }`;
 
   try {

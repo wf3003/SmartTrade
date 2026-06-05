@@ -574,6 +574,53 @@ export function disableOptRule(id: number): void {
     .run(new Date().toISOString(), id);
 }
 
+// ========== intercept_params: 拦截阈值热参数 ==========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS intercept_params (
+    param_name TEXT PRIMARY KEY,
+    param_value REAL NOT NULL,
+    param_default REAL NOT NULL,
+    description TEXT,
+    last_adjusted TEXT
+  )
+`);
+
+export function seedInterceptParams(): void {
+  const cnt = db.prepare("SELECT COUNT(*) as c FROM intercept_params").get() as any;
+  if (cnt?.c > 0) return;
+  const defs: [string, number, string][] = [
+    ["ai_score_min", 40, "AI评分最低通过线"],
+    ["entry_quality_min", 35, "入场质量最低分"],
+    ["market_quality_min", 20, "行情质量最低分"],
+    ["cont_accuracy_min", 55, "回测延续率最低"],
+    ["rev_accuracy_min", 55, "回测反转率最低"],
+    ["rsi_extreme_short", 20, "做空RSI极度超卖线"],
+    ["rsi_extreme_long", 80, "做多RSI极度超买线"],
+  ];
+  const now = new Date().toISOString();
+  const ins = db.prepare("INSERT INTO intercept_params (param_name,param_value,param_default,description,last_adjusted) VALUES (?,?,?,?,?)");
+  for (const [n, v, d] of defs) ins.run(n, v, v, d, now);
+}
+
+export function getInterceptParams(): Map<string, number> {
+  const rows = db.prepare("SELECT param_name,param_value FROM intercept_params").all() as any[];
+  const m = new Map<string, number>();
+  for (const r of rows) m.set(r.param_name, Number(r.param_value));
+  m.set("ai_score_min", m.get("ai_score_min") ?? 40);
+  m.set("entry_quality_min", m.get("entry_quality_min") ?? 35);
+  m.set("market_quality_min", m.get("market_quality_min") ?? 20);
+  m.set("cont_accuracy_min", m.get("cont_accuracy_min") ?? 55);
+  m.set("rev_accuracy_min", m.get("rev_accuracy_min") ?? 55);
+  m.set("rsi_extreme_short", m.get("rsi_extreme_short") ?? 20);
+  m.set("rsi_extreme_long", m.get("rsi_extreme_long") ?? 80);
+  return m;
+}
+
+export function updateInterceptParam(name: string, value: number): void {
+  db.prepare("UPDATE intercept_params SET param_value=?, last_adjusted=? WHERE param_name=?")
+    .run(value, new Date().toISOString(), name);
+}
+
 // ========== rule_performance (漂移检测) CRUD ==========
 export function insertRulePerformance(p: {
   rule_id: number; check_time: string; recent_samples: number;
