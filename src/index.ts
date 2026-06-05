@@ -15,7 +15,7 @@ import { getMarketReport } from "./agent";
 import { checkExtremeDeviation, calcMACD, calcIndicators, convertCandles } from "./indicators";
 import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward } from "./state";
+import { setLatestReport, atrCache, rsiCache, indicatorCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward, applyOptRules, getPositionRuleMultiplier, optRulesCache, loadOptRulesFromDb } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats, buildDecisionAnalysis } from "./ai-review";
 import { 
@@ -33,7 +33,12 @@ import {
   updatePeakPnlInDb,
   getTradesHistory,
   insertAiReview,
+  insertIndicatorSnapshot,
+  updateSnapshotResult,
+  linkSnapshotToTrade,
+  seedDefaultOptRules,
 } from "./db";
+import { runOptimizer, evaluateUnjudgedDecisions } from "./auto-optimizer";
 
 const MONITOR_INTERVAL = 5_000;  // 每 5 秒检查持仓（原2秒，降低OKX限频压力）
 const DECISION_INTERVAL = 5 * 60_000; // 每 5 分钟策略决策
@@ -41,6 +46,8 @@ const MINIMUM_ACCOUNT_STOP_USDT = CONFIG.accountStopLossUsdt;
 
 // 记录每个持仓的峰值盈利（用于移动止盈）
 const peakPnlMap = new Map<string, number>();
+// 记录每笔开仓的 indicator_snapshot ID（平仓时更新结果）
+const snapshotIdMap = new Map<string, number>();
 // 记录本周期内每个持仓的已分批平仓比例（防重入）
 const partialCloseMap = new Map<string, number>();
 // 记录新开仓时间（防开仓瞬间止损）
@@ -146,6 +153,14 @@ async function executeFullClose(
 
   if (dbTrade) {
     closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, `${closeType}[${pnlSource}]`);
+    // 更新 indicator_snapshot 结果
+    const snapId = snapshotIdMap.get(symbol);
+    if (snapId) {
+      updateSnapshotResult(snapId, actualPnl >= 0 ? "win" : "loss", actualPnl, `${closeType}[${pnlSource}]`);
+    }
+    // 也更新按 trade_id 关联的 snapshot
+    db.prepare("UPDATE indicator_snapshots SET result = ?, pnl = ?, close_type = ? WHERE trade_id = ? AND result = 'open'")
+      .run(actualPnl >= 0 ? "win" : "loss", actualPnl, `${closeType}[${pnlSource}]`, dbTrade.id);
   }
   // 状态清理
   peakPnlMap.delete(symbol);
@@ -266,6 +281,10 @@ async function main() {
   } catch {}
   // 重启恢复复盘反馈参数（避免失忆）
   await loadFeedbackFromDb();
+  // 如果是全新部署，写入默认规则
+  const seeded = seedDefaultOptRules();
+  if (seeded > 0) logger.info(`⚙️ 写入 ${seeded} 条默认优化规则`);
+  await loadOptRulesFromDb();
   // 强制覆盖硬性惩罚（追空-8分），不受旧持久化数据影响
   ensureHardPenalties();
   // 恢复连续止损计数（不复位冷却惩罚）
@@ -849,9 +868,65 @@ async function aiDecisionCycle() {
           vol24hM: ticker?.volume24h ? (ticker.volume24h / 1e6).toFixed(1) : '?',
           price: ticker?.price,
         };
+        // 应用 opt_rules：统计规则 + 复盘惩罚共同调整评分
+        const ind = indicatorCache.get(trade.symbol);
+        const indRsi1h = ind?.rsi_1h ?? rsiCache.get(trade.symbol) ?? 50;
+        const indAdx1h = ind?.adx_1h ?? 30;
+        const indRsi1d = ind?.rsi_1d ?? 50;
+        const indAdx1d = ind?.adx_1d ?? 30;
+        const indAtrPct = ind?.atr_pct ?? (atrCache.get(trade.symbol) ?? 0.015) * 100;
+        const indEmaDist = ind?.ema_dist_pct ?? 0;
+        const mqVal = sa?.sentiment?.marketQuality ?? 50;
+        const entryQVal = sa?.entryQuality
+          ? (trade.action === "buy" ? sa.entryQuality.longEntryScore : sa.entryQuality.shortEntryScore)
+          : 50;
+        const currentRegime = ind?.regime ?? "unknown";
+        const optResult = applyOptRules(
+          trade.symbol, side, aiSc,
+          indRsi1h, indAdx1h, indRsi1d, indAdx1d,
+          indAtrPct, indEmaDist, ticker?.fundingRate ?? 0,
+          ticker?.volume24h ?? 0, mqVal, entryQVal,
+          currentRegime
+        );
+        if (optResult.score !== aiSc) {
+          logger.info(`   opt_rules 调整评分: ${aiSc}→${optResult.score} (${optResult.logs.join(", ")})`);
+        }
+        // opt_rules 中的仓位规则
+        const optPosMult = getPositionRuleMultiplier(
+          trade.symbol, side,
+          indRsi1h, indAdx1h, indRsi1d, indAdx1d,
+          indAtrPct, indEmaDist, ticker?.fundingRate ?? 0,
+          ticker?.volume24h ?? 0, mqVal, entryQVal,
+          currentRegime
+        );
+        if (optPosMult !== 1.0) {
+          const origPct = trade.amountPercent;
+          trade.amountPercent = Math.min(CONFIG.basePositionPct * 2, Math.round(trade.amountPercent * optPosMult));
+          logger.info(`   opt_rules 仓位乘数x${optPosMult.toFixed(2)}: ${origPct}%→${trade.amountPercent}%`);
+        }
+
         logger.warn(`🤖 AI 开仓: ${trade.action} ${trade.symbol} | ${trade.leverage}x | ${trade.amountPercent}%`);
-        logger.info(`   AI评分:${aiSc} ${aiRsn}`);
+        logger.info(`   AI评分:${optResult.score} ${aiRsn}`);
         logger.info(`   快照 RSI:${snap.rsi} ATR:${snap.atrPct}% 费率:${snap.fundingRatePct}% 量:${snap.vol24hM}M`);
+
+        // 保存 indicator_snapshot（开仓前记录所有指标值）
+        const signalType = trade.reason?.includes("追空") ? "chase_short"
+          : trade.reason?.includes("追多") || trade.reason?.includes("追涨") ? "chase_long"
+          : trade.reason?.includes("反转") ? "reversal" : "continuation";
+        const snapId = insertIndicatorSnapshot({
+          decision_id: null, trade_id: null, time: new Date().toISOString(),
+          symbol: trade.symbol, side, regime: currentRegime,
+          rsi_1h: indRsi1h, rsi_1d: indRsi1d,
+          adx_1h: indAdx1h, adx_1d: indAdx1d,
+          atr_pct: indAtrPct, ema_dist_pct: indEmaDist,
+          funding_rate: ticker?.fundingRate ?? null,
+          volume_24h: ticker?.volume24h ?? null,
+          market_quality: mqVal, entry_quality: entryQVal,
+          leverage: trade.leverage, position_pct: trade.amountPercent,
+          ai_confidence: trade.confidence, ai_score: optResult.score,
+          signal_type: signalType,
+        });
+        snapshotIdMap.set(trade.symbol, Number(snapId));
 
         const decId = insertDecision({
           time: new Date().toISOString(), ai_model: CONFIG.ai.model,
@@ -877,6 +952,12 @@ async function aiDecisionCycle() {
           openedThisSession.add(trade.symbol);
           openedThisCycle++;
           newPositionTime.set(trade.symbol, Date.now());
+          // 回写 snapshot 的 trade_id
+          const dbTradeRow = db.prepare("SELECT id FROM trades WHERE symbol = ? AND status = 'open' ORDER BY id DESC LIMIT 1").get(trade.symbol) as any;
+          if (dbTradeRow) {
+            const snapId2 = snapshotIdMap.get(trade.symbol);
+            if (snapId2) linkSnapshotToTrade(snapId2, dbTradeRow.id);
+          }
           // 逐笔延迟，避免 demo 环境瞬时并发触发限频
           await new Promise(r => setTimeout(r, 1500));
         } else {
@@ -890,7 +971,7 @@ async function aiDecisionCycle() {
     // 策略评分已移除，分析日志改为展示AI方向复核摘要
 
     // 6. AI 交易复盘（每 6 周期≈30 分钟一次，独立定时器，不阻塞决策循环）
-    scheduleReview(aiCycleNumber);
+    scheduleReview(aiCycleNumber, tickers);
   } catch (e: any) {
     logger.error(`AI 决策异常: ${e.message}`);
   }
@@ -898,7 +979,7 @@ async function aiDecisionCycle() {
 
 /** 独立复盘定时器：每 6 周期≈30分钟触发一次，不阻塞决策主流程 */
 let lastReviewCycle = 0;
-async function scheduleReview(currentCycle: number) {
+async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
   if (currentCycle % 6 !== 0 || currentCycle === lastReviewCycle) return;
   try {
     const allTrades = getTradesHistory(7) as any[];
@@ -957,6 +1038,21 @@ async function scheduleReview(currentCycle: number) {
         logger.info(`📊 复盘反馈已应用完成`);
         // 持久化到数据库，防止进程重启丢失
         saveFeedbackToDb({ consecutiveStopCount: Object.fromEntries(consecutiveStopCount) }).catch(() => {});
+        // 评估未处理决策：对比决策时价格与当前价格
+        try {
+          const evalCount = evaluateUnjudgedDecisions(tickers);
+          if (evalCount > 0) {
+            logger.info(`📊 决策评估: 评估了 ${evalCount} 条未评估决策`);
+          }
+        } catch (e: any) {
+          logger.warn(`[Evaluation] 异常: ${e.message}`);
+        }
+        // 运行 optimizer：统计历史数据 → 生成 opt_rules → 刷新缓存
+        runOptimizer().then(rulesCreated => {
+          if (rulesCreated > 0) {
+            loadOptRulesFromDb().then(() => logger.info(`⚙️ 加载 ${optRulesCache.length} 条优化规则到缓存`));
+          }
+        }).catch((e: any) => logger.warn(`[Optimizer] 异常: ${e.message}`));
       } catch {}
       // 持久化到 DB
       const wins = allTrades.filter((t: any) => t.status === 'closed' && (t.pnl || 0) > 0).length;

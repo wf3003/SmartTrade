@@ -1,7 +1,7 @@
 import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
 import { calcIndicators, calcMarketQuality, checkExtremeDeviation, convertCandles, isReversalConfirmed } from "./indicators";
-import { setAtrCache, setRsiCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor } from "./state";
+import { setAtrCache, setRsiCache, setIndicatorCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor } from "./state";
 import { logger } from "./logger";
 import { runBacktest, generateBacktestSummary, isHighQualitySignal, type BacktestResult } from "./backtest";
 import { insertBacktestLog } from "./db";
@@ -85,6 +85,16 @@ export async function generateStrategyReport(
     }
     // 行情六类分类
     const regime = classifyRegime(dailyAdx, dailyUp, p, id.ema20, id.ema50);
+    // 缓存完整指标供 snapshot + opt_rules 消费（需在 regime 声明后）
+    setIndicatorCache(sym, {
+      regime,
+      rsi_1h: i1.rsi14,
+      rsi_1d: id.rsi14,
+      adx_1h: i1.adx,
+      adx_1d: id.adx,
+      atr_pct: at,
+      ema_dist_pct: (p - i1.ema20) / i1.ema20 * 100,
+    });
     // 强趋势(ADX>50)用EMA20，普通趋势用EMA50，确保价格有机会触到
     const entryMa = dailyAdx > 50 ? i1.ema20 : i1.ema50;
     const entryMaName = dailyAdx > 50 ? "EMA20" : "EMA50";

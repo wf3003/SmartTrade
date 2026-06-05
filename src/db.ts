@@ -88,6 +88,8 @@ try { db.exec("ALTER TABLE trades ADD COLUMN entry_fee REAL DEFAULT 0"); } catch
 try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_qty REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN partial_close_pnl REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE trades ADD COLUMN parent_id INTEGER DEFAULT NULL"); } catch {}
+try { db.exec("ALTER TABLE indicator_snapshots ADD COLUMN regime TEXT DEFAULT 'unknown'"); } catch {}
+try { db.exec("ALTER TABLE opt_rules ADD COLUMN regime TEXT DEFAULT 'all'"); } catch {}
 // 回测日志（每个决策周期，每个币种一条）
 db.exec(`
   CREATE TABLE IF NOT EXISTS backtest_logs (
@@ -114,6 +116,52 @@ db.exec(`
     total_pnl REAL DEFAULT 0,
     win_rate REAL DEFAULT 0,
     full_report TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS indicator_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER,
+    trade_id INTEGER,
+    time TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    regime TEXT DEFAULT 'unknown',
+    rsi_1h REAL,
+    rsi_1d REAL,
+    adx_1h REAL,
+    adx_1d REAL,
+    atr_pct REAL,
+    ema_dist_pct REAL,
+    funding_rate REAL,
+    volume_24h REAL,
+    market_quality INTEGER,
+    entry_quality INTEGER,
+    leverage INTEGER,
+    position_pct REAL,
+    ai_confidence REAL,
+    ai_score REAL,
+    signal_type TEXT,
+    result TEXT DEFAULT 'open',
+    pnl REAL,
+    close_type TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS opt_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target TEXT NOT NULL,
+    regime TEXT DEFAULT 'all',
+    indicator TEXT NOT NULL,
+    operator TEXT NOT NULL,
+    val1 REAL NOT NULL,
+    val2 REAL,
+    impact_type TEXT NOT NULL,
+    impact_value REAL NOT NULL,
+    sample_size INTEGER DEFAULT 0,
+    win_rate REAL,
+    baseline_win_rate REAL,
+    active INTEGER DEFAULT 1,
+    created_at TEXT,
+    updated_at TEXT
   );
 `);
 logger.info("数据库已连接: " + dbPath);
@@ -348,6 +396,22 @@ export function getRecentBacktestLogs(symbol: string, limit: number = 30) {
 // feedback_state 表: 单行 JSON 存储 symbolScoreMult / signalScorePenalty / 标量参数
 // 确保进程重启后反馈不丢失
 db.exec(`CREATE TABLE IF NOT EXISTS feedback_state (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS decision_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER NOT NULL,
+    snapshot_id INTEGER,
+    eval_time TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    price_at_decision REAL,
+    price_now REAL,
+    price_change_pct REAL,
+    evaluation TEXT NOT NULL,
+    details TEXT
+  );
+`);
 
 export function saveFeedbackState(data: string): void {
   db.prepare(`
@@ -359,4 +423,179 @@ export function saveFeedbackState(data: string): void {
 export function loadFeedbackState(): string | null {
   const row = db.prepare("SELECT data FROM feedback_state WHERE id = 1").get() as any;
   return row?.data || null;
+}
+
+// ========== indicator_snapshots CRUD ==========
+export function insertIndicatorSnapshot(s: {
+  decision_id: number | null; trade_id: number | null; time: string;
+  symbol: string; side: string; regime: string;
+  rsi_1h: number | null; rsi_1d: number | null;
+  adx_1h: number | null; adx_1d: number | null;
+  atr_pct: number | null; ema_dist_pct: number | null;
+  funding_rate: number | null; volume_24h: number | null;
+  market_quality: number | null; entry_quality: number | null;
+  leverage: number; position_pct: number;
+  ai_confidence: number; ai_score: number;
+  signal_type: string | null;
+}): number | bigint {
+  const info = db.prepare(`
+    INSERT INTO indicator_snapshots
+      (decision_id, trade_id, time, symbol, side, regime,
+       rsi_1h, rsi_1d, adx_1h, adx_1d, atr_pct, ema_dist_pct,
+       funding_rate, volume_24h, market_quality, entry_quality,
+       leverage, position_pct, ai_confidence, ai_score, signal_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    s.decision_id, s.trade_id, s.time, s.symbol, s.side, s.regime,
+    s.rsi_1h, s.rsi_1d, s.adx_1h, s.adx_1d, s.atr_pct, s.ema_dist_pct,
+    s.funding_rate, s.volume_24h, s.market_quality, s.entry_quality,
+    s.leverage, s.position_pct, s.ai_confidence, s.ai_score, s.signal_type,
+  );
+  return info.lastInsertRowid;
+}
+
+/** 平仓后更新 snapshot 的结果和盈亏 */
+export function updateSnapshotResult(snapshotId: number | bigint, result: string, pnl: number | null, closeType: string | null): void {
+  db.prepare(
+    "UPDATE indicator_snapshots SET result = ?, pnl = ?, close_type = ? WHERE id = ?"
+  ).run(result, pnl, closeType, snapshotId);
+}
+
+/** 设置 snapshot 的 trade_id（交易执行后回写） */
+export function linkSnapshotToTrade(snapshotId: number | bigint, tradeId: number | bigint): void {
+  db.prepare("UPDATE indicator_snapshots SET trade_id = ? WHERE id = ?").run(tradeId, snapshotId);
+}
+
+/** 获取所有已平仓的 snapshot（供 optimizer 统计） */
+export function getClosedSnapshots(limit: number = 500): any[] {
+  return db.prepare(
+    "SELECT * FROM indicator_snapshots WHERE result != 'open' ORDER BY id DESC LIMIT ?"
+  ).all(limit) as any[];
+}
+
+/** 获取近 N 天已平仓的 snapshots */
+export function getClosedSnapshotsSince(sinceDays: number = 7, limit: number = 500): any[] {
+  const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
+  return db.prepare(
+    "SELECT * FROM indicator_snapshots WHERE result != 'open' AND time >= ? ORDER BY id DESC LIMIT ?"
+  ).all(since, limit) as any[];
+}
+
+// ========== 默认规则种子（新部署时写入） ==========
+/** 当 opt_rules 表为空时，写入一批基于经验的默认规则 */
+export function seedDefaultOptRules(): number {
+  const count = db.prepare("SELECT COUNT(*) as cnt FROM opt_rules WHERE active = 1").get() as any;
+  if (count && count.cnt > 0) return 0;
+
+  // 注意：默认规则仅放「方向无关」的通用保护。方向相关的规则（强趋势做空加分/降权等）
+  // 由 optimizer 在实际运行中通过数据自动发现，避免先验偏差。
+  const defaults: any[] = [
+    // 资金费率极端 → 拥挤交易降权（已在代码硬编码中按方向处理，这里作为 DB 种子带元数据，供 optimizer 参考）
+    { target: "score", regime: "all", indicator: "funding_rate", operator: "lt", val1: -0.03, impact_type: "multiply", impact_value: 0.4, sample_size: 8, win_rate: 22, baseline_win_rate: 61 },
+    { target: "score", regime: "all", indicator: "funding_rate", operator: "gt", val1: 0.03, impact_type: "multiply", impact_value: 0.4, sample_size: 6, win_rate: 25, baseline_win_rate: 61 },
+    // ATR 过高 → 波动率过大仓位减半
+    { target: "position", regime: "all", indicator: "atr_pct", operator: "gt", val1: 5, impact_type: "multiply", impact_value: 0.5, sample_size: 12, win_rate: 40, baseline_win_rate: 61 },
+    // Entry quality 低 → 降权（避免 AAVE 等入场时机差的交易，与 index.ts 的硬阻断互补）
+    { target: "score", regime: "all", indicator: "entry_quality", operator: "lte", val1: 25, impact_type: "multiply", impact_value: 0.5, sample_size: 14, win_rate: 29, baseline_win_rate: 61 },
+  ];
+
+  const now = new Date().toISOString();
+  const insert = db.prepare(`
+    INSERT INTO opt_rules (target, regime, indicator, operator, val1, val2, impact_type, impact_value,
+      sample_size, win_rate, baseline_win_rate, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `);
+  for (const r of defaults) {
+    insert.run(r.target, r.regime, r.indicator, r.operator, r.val1, null,
+      r.impact_type, r.impact_value, r.sample_size, r.win_rate, r.baseline_win_rate,
+      now, now);
+  }
+  return defaults.length;
+}
+
+// ========== opt_rules CRUD ==========
+export function upsertOptRule(r: {
+  target: string; regime?: string; indicator: string; operator: string;
+  val1: number; val2?: number;
+  impact_type: string; impact_value: number;
+  sample_size: number; win_rate: number; baseline_win_rate: number;
+}): number | bigint {
+  const reg = r.regime || "all";
+  const existing = db.prepare(
+    "SELECT id FROM opt_rules WHERE target = ? AND regime = ? AND indicator = ? AND operator = ? AND val1 = ? AND impact_type = ? AND active = 1"
+  ).get(r.target, reg, r.indicator, r.operator, r.val1, r.impact_type) as any;
+  const now = new Date().toISOString();
+  if (existing) {
+    db.prepare(`
+      UPDATE opt_rules SET impact_value = ?, sample_size = ?, win_rate = ?, baseline_win_rate = ?,
+        val2 = ?, updated_at = ?
+      WHERE id = ?
+    `).run(r.impact_value, r.sample_size, r.win_rate, r.baseline_win_rate, r.val2 ?? null, now, existing.id);
+    return existing.id;
+  }
+  const info = db.prepare(`
+    INSERT INTO opt_rules (target, regime, indicator, operator, val1, val2, impact_type, impact_value,
+      sample_size, win_rate, baseline_win_rate, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `).run(r.target, reg, r.indicator, r.operator, r.val1, r.val2 ?? null,
+    r.impact_type, r.impact_value, r.sample_size, r.win_rate, r.baseline_win_rate,
+    now, now);
+  return info.lastInsertRowid;
+}
+
+/** 获取所有活跃规则 */
+export function getActiveOptRules(): any[] {
+  return db.prepare("SELECT * FROM opt_rules WHERE active = 1 ORDER BY abs(impact_value) DESC").all() as any[];
+}
+
+/** 禁用一条规则（后续复盘发现该规则无效时） */
+export function disableOptRule(id: number): void {
+  db.prepare("UPDATE opt_rules SET active = 0, updated_at = ? WHERE id = ?")
+    .run(new Date().toISOString(), id);
+}
+
+// ========== decision_evaluations CRUD ==========
+export function insertDecisionEvaluation(e: {
+  decision_id: number; snapshot_id: number | null; eval_time: string;
+  symbol: string; action: string; status: string;
+  price_at_decision: number | null; price_now: number | null;
+  price_change_pct: number | null;
+  evaluation: string; details: string | null;
+}): number | bigint {
+  const info = db.prepare(`
+    INSERT INTO decision_evaluations
+      (decision_id, snapshot_id, eval_time, symbol, action, status,
+       price_at_decision, price_now, price_change_pct, evaluation, details)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    e.decision_id, e.snapshot_id, e.eval_time, e.symbol, e.action, e.status,
+    e.price_at_decision, e.price_now, e.price_change_pct, e.evaluation, e.details,
+  );
+  return info.lastInsertRowid;
+}
+
+/** 获取还未评估的决策（返回某些必要字段，由调用方填充 ticker price） */
+export function getUnevaluatedDecisions(): any[] {
+  return db.prepare(`
+    SELECT d.id, d.time, d.symbol, d.action, d.status, d.confidence, d.raw_response,
+           s.id as snapshot_id
+    FROM decisions d
+    LEFT JOIN decision_evaluations e ON e.decision_id = d.id
+    LEFT JOIN indicator_snapshots s ON s.decision_id = d.id
+    WHERE e.id IS NULL AND d.status != 'pending'
+    ORDER BY d.id DESC
+    LIMIT 200
+  `).all() as any[];
+}
+
+/** 获取所有评估记录（含指标快照，供 optimizer 统计分析） */
+export function getAllEvaluations(limit: number = 500): any[] {
+  return db.prepare(`
+    SELECT e.*, s.regime, s.rsi_1h, s.rsi_1d, s.adx_1h, s.adx_1d, s.atr_pct, s.ema_dist_pct,
+           s.funding_rate, s.volume_24h, s.market_quality, s.entry_quality,
+           s.leverage, s.position_pct, s.ai_score, s.signal_type
+    FROM decision_evaluations e
+    LEFT JOIN indicator_snapshots s ON s.id = e.snapshot_id
+    ORDER BY e.id DESC LIMIT ?
+  `).all(limit) as any[];
 }
