@@ -88,15 +88,23 @@ export function applyOptRules(
     if (v_fr !== null && v_fr > 0.03) { score = Math.round(score * 0.4); logs.push("[硬]费率>0.03% 做多 ×0.4"); }
   }
   // 收集当前行情下已匹配的 indicator（防 "all" 规则与特定行情规则叠加）
+  // combo 规则也纳入 dedup key，防止组合规则和单指标规则双重命中
   const matchedIndicators = new Set<string>();
   for (const rule of optRulesCache) {
-    // 先处理行情特定规则
     if (rule.regime !== "all" && rule.regime !== currentRegime) continue;
-    if (rule.regime !== "all") matchedIndicators.add(`${rule.indicator}:${rule.operator}:${rule.val1}`);
+    if (rule.regime !== "all") {
+      const key = rule.indicator2
+        ? `${rule.indicator}:${rule.operator}:${rule.val1}:${rule.indicator2}:${rule.op2}:${rule.val3}`
+        : `${rule.indicator}:${rule.operator}:${rule.val1}`;
+      matchedIndicators.add(key);
+    }
   }
   for (const rule of optRulesCache) {
     // "all" 规则只在无行情特定规则冲突时才应用
-    if (rule.regime === "all" && matchedIndicators.has(`${rule.indicator}:${rule.operator}:${rule.val1}`)) continue;
+    const ruleKey = rule.indicator2
+      ? `${rule.indicator}:${rule.operator}:${rule.val1}:${rule.indicator2}:${rule.op2}:${rule.val3}`
+      : `${rule.indicator}:${rule.operator}:${rule.val1}`;
+    if (rule.regime === "all" && matchedIndicators.has(ruleKey)) continue;
     if (rule.regime !== "all" && rule.regime !== currentRegime) continue;
     let matches = false;
     const v = getIndicatorValue(rule.indicator, rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);
@@ -172,11 +180,19 @@ export function getPositionRuleMultiplier(
   for (const r of optRulesCache) {
     if (r.regime !== "all" && r.regime !== currentRegime) continue;
     if (r.target !== "position" && r.target !== "all") continue;
-    if (r.regime !== "all") matchedPosIndicators.add(`${r.indicator}:${r.operator}:${r.val1}`);
+    if (r.regime !== "all") {
+      const key = r.indicator2
+        ? `${r.indicator}:${r.operator}:${r.val1}:${r.indicator2}:${r.op2}:${r.val3}`
+        : `${r.indicator}:${r.operator}:${r.val1}`;
+      matchedPosIndicators.add(key);
+    }
   }
   let mult = 1.0;
   for (const rule of optRulesCache) {
-    if (rule.regime === "all" && matchedPosIndicators.has(`${rule.indicator}:${rule.operator}:${rule.val1}`)) continue;
+    const posKey = rule.indicator2
+      ? `${rule.indicator}:${rule.operator}:${rule.val1}:${rule.indicator2}:${rule.op2}:${rule.val3}`
+      : `${rule.indicator}:${rule.operator}:${rule.val1}`;
+    if (rule.regime === "all" && matchedPosIndicators.has(posKey)) continue;
     if (rule.regime !== "all" && rule.regime !== currentRegime) continue;
     if (rule.target !== "position" && rule.target !== "all") continue;
     const v = getIndicatorValue(rule.indicator, rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);

@@ -311,13 +311,18 @@ export function discoverComboPatterns(): number {
   const snapshots = getClosedSnapshots(200) as any[];
   if (snapshots.length < 20) return 0;
 
-  const baseline = snapshots.filter(s => s.result === "win").length / snapshots.length;
   let created = 0;
+  // 按多空分组搜索，防偏态数据污染（如 71笔做空2笔做多）
+  const sides = ["short", "long"];
+  for (const side of sides) {
+    const sideSnapshots = snapshots.filter(s => s.side === side);
+    if (sideSnapshots.length < 10) continue;
+    const baseline = sideSnapshots.filter(s => s.result === "win").length / sideSnapshots.length;
 
   for (const [f1, n1, f2, n2] of COMBO_PAIRS) {
-    // 取有效值并按百分位分 3 档
-    const vals1 = snapshots.map(s => Number(s[f1] ?? s[n1])).filter(v => !isNaN(v)).sort((a,b) => a-b);
-    const vals2 = snapshots.map(s => Number(s[f2] ?? s[n2])).filter(v => !isNaN(v)).sort((a,b) => a-b);
+    // 取 side 组内的有效值并按百分位分 3 档
+    const vals1 = sideSnapshots.map(s => Number(s[f1] ?? s[n1])).filter(v => !isNaN(v)).sort((a,b) => a-b);
+    const vals2 = sideSnapshots.map(s => Number(s[f2] ?? s[n2])).filter(v => !isNaN(v)).sort((a,b) => a-b);
     if (vals1.length < 20 || vals2.length < 20) continue;
 
     const p33_1 = vals1[Math.floor(vals1.length / 3)];
@@ -325,9 +330,9 @@ export function discoverComboPatterns(): number {
     const p33_2 = vals2[Math.floor(vals2.length / 3)];
     const p66_2 = vals2[Math.floor(vals2.length * 2 / 3)];
 
-    // 3×3 grid
+    // 3×3 grid（用 sideSnapshots 而不是全部数据）
     const grid = new Map<string, { wins: number; total: number }>();
-    for (const s of snapshots) {
+    for (const s of sideSnapshots) {
       const v1 = Number(s[f1] ?? s[n1]);
       const v2 = Number(s[f2] ?? s[n2]);
       if (isNaN(v1) || isNaN(v2)) continue;
@@ -385,10 +390,10 @@ export function discoverComboPatterns(): number {
               i2r === 0 ? p33_2 : i2r === 1 ? p66_2 : Infinity, ruleId);
         } catch {}
         created++;
-        logger.info(`[Combo] ${parts[0]}(${i1r}) + ${parts[2]}(${i2r}) 胜率${(wr*100).toFixed(0)}%/${e.total}笔 (基线${(baseline*100).toFixed(0)}%)`);
       } catch {}
     }
   }
+  } // end for side
   return created;
 }
 
