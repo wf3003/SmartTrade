@@ -620,6 +620,29 @@ export function seedInterceptParams(): void {
     ["eq_vol_surge_bear_sb", 5, "放量下跌做空加分"],
     ["eq_momentum_decay_p", 15, "动量衰减扣分"],
     ["eq_tf_daily_weight", 150, "日线权重(百分数, 如150=1.5x)"],
+    ["strategy_adx_override", 58, "ADX>此值强制延续策略"],
+    ["sl_atr_mult", 200, "止损=ATR×此值/100 (即2.0x)"],
+    ["tp_atr_mult", 400, "止盈=ATR×此值/100 (即4.0x)"],
+    ["flip_pnl_threshold_high_adx", -250, "高ADX时持仓翻转PnL%×100"],
+    ["flip_pnl_threshold_low_adx", -150, "低ADX时持仓翻转PnL%×100"],
+    ["extreme_dev_atr_mult", 300, "极端偏离ATR倍数×100"],
+    ["extreme_dev_atr_mult_cont", 400, "延续策略极端偏离ATR倍数×100"],
+    ["pos_mq_high_threshold", 70, "高质量行情最低分"],
+    ["pos_mq_med_threshold", 40, "中质量行情最低分"],
+    ["pos_mq_low_threshold", 20, "低质量行情最低分"],
+    ["pos_mq_mult_high", 100, "高质量仓位乘数%"],
+    ["pos_mq_mult_med", 60, "中质量仓位乘数%"],
+    ["pos_mq_mult_low", 40, "低质量仓位乘数%"],
+    ["lev_vol_threshold_high", 150, "高波动ATR%阈值×100"],
+    ["lev_vol_threshold_low", 80, "低波动ATR%阈值×100"],
+    ["lev_vol_mult_high", 70, "高波动杠杆乘数%"],
+    ["lev_vol_mult_mid", 100, "正常波动杠杆乘数%"],
+    ["lev_vol_mult_low", 150, "低波动杠杆乘数%"],
+    ["max_side_margin_pct", 40, "同方向保证金上限%"],
+    ["profit_protect_retrace_pct", 25, "浮盈回撤保护线%"],
+    ["cooldown_first_min", 30, "首次止损冷却分钟"],
+    ["cooldown_second_min", 60, "二次止损冷却分钟"],
+    ["cooldown_third_min", 240, "三次+止损冷却分钟"],
   ];
   const now = new Date().toISOString();
   const ins = db.prepare("INSERT INTO intercept_params (param_name,param_value,param_default,description,last_adjusted) VALUES (?,?,?,?,?)");
@@ -637,6 +660,33 @@ export function getInterceptParams(): Map<string, number> {
   m.set("rev_accuracy_min", m.get("rev_accuracy_min") ?? 55);
   m.set("rsi_extreme_short", m.get("rsi_extreme_short") ?? 20);
   m.set("rsi_extreme_long", m.get("rsi_extreme_long") ?? 80);
+  // 策略级
+  m.set("strategy_adx_override", m.get("strategy_adx_override") ?? 58);
+  m.set("sl_atr_mult", m.get("sl_atr_mult") ?? 200);
+  m.set("tp_atr_mult", m.get("tp_atr_mult") ?? 400);
+  m.set("flip_pnl_threshold_high_adx", m.get("flip_pnl_threshold_high_adx") ?? -250);
+  m.set("flip_pnl_threshold_low_adx", m.get("flip_pnl_threshold_low_adx") ?? -150);
+  m.set("extreme_dev_atr_mult", m.get("extreme_dev_atr_mult") ?? 300);
+  m.set("extreme_dev_atr_mult_cont", m.get("extreme_dev_atr_mult_cont") ?? 400);
+  // 行情质量仓位
+  m.set("pos_mq_high_threshold", m.get("pos_mq_high_threshold") ?? 70);
+  m.set("pos_mq_med_threshold", m.get("pos_mq_med_threshold") ?? 40);
+  m.set("pos_mq_low_threshold", m.get("pos_mq_low_threshold") ?? 20);
+  m.set("pos_mq_mult_high", m.get("pos_mq_mult_high") ?? 100);
+  m.set("pos_mq_mult_med", m.get("pos_mq_mult_med") ?? 60);
+  m.set("pos_mq_mult_low", m.get("pos_mq_mult_low") ?? 40);
+  // 杠杆-波动率
+  m.set("lev_vol_threshold_high", m.get("lev_vol_threshold_high") ?? 150);
+  m.set("lev_vol_threshold_low", m.get("lev_vol_threshold_low") ?? 80);
+  m.set("lev_vol_mult_high", m.get("lev_vol_mult_high") ?? 70);
+  m.set("lev_vol_mult_mid", m.get("lev_vol_mult_mid") ?? 100);
+  m.set("lev_vol_mult_low", m.get("lev_vol_mult_low") ?? 150);
+  // 风控
+  m.set("max_side_margin_pct", m.get("max_side_margin_pct") ?? 40);
+  m.set("profit_protect_retrace_pct", m.get("profit_protect_retrace_pct") ?? 25);
+  m.set("cooldown_first_min", m.get("cooldown_first_min") ?? 30);
+  m.set("cooldown_second_min", m.get("cooldown_second_min") ?? 60);
+  m.set("cooldown_third_min", m.get("cooldown_third_min") ?? 240);
   return m;
 }
 

@@ -58,7 +58,9 @@ const stopCooldown = new Map<string, number>();
 // 同一币种连续止损计数（递增惩罚）
 const consecutiveStopCount = new Map<string, number>();
 // 止损后暂停该币种交易的最小分钟数
-const STOP_COOLDOWN_MINUTES = 30;
+function getIntercept(name: string, fallback: number): number {
+  return interceptParamsCache.get(name) ?? fallback;
+}
 let shortPauseUntil = 0;
 // 连续止损计数按天衰减：超过24h未新止损则计数减1
 function decayStopCount(symbol: string): void {
@@ -78,9 +80,9 @@ function decayStopCount(symbol: string): void {
 function getDynamicCooldown(symbol: string): number {
   decayStopCount(symbol);
   const cnt = consecutiveStopCount.get(symbol) || 0;
-  if (cnt >= 3) return 4 * 60;   // 4小时
-  if (cnt === 2) return 60;       // 1小时
-  return STOP_COOLDOWN_MINUTES;   // 15分钟
+  if (cnt >= 3) return getIntercept("cooldown_third_min", 240);
+  if (cnt === 2) return getIntercept("cooldown_second_min", 60);
+  return getIntercept("cooldown_first_min", 30);
 }
 // 启动后等待 N 个周期再开新仓（让账户数据和 ATR 缓存稳定）
 const STARTUP_COOLDOWN_CYCLES = 0;
@@ -807,12 +809,14 @@ async function aiDecisionCycle() {
           execLog.push(msg);
           continue;
         } else if (mq < 40) {
-          trade.amountPercent = Math.round(trade.amountPercent * 0.5);
+          const mqLoMult = (interceptParamsCache.get("pos_mq_mult_low") ?? 40) / 100;
+          trade.amountPercent = Math.round(trade.amountPercent * mqLoMult);
           trade.leverage = Math.max(2, trade.leverage - 2);
-          logger.info(`   ${trade.symbol} 行情质量${mq}，仓位再减半至${trade.amountPercent}%，杠杆降至${trade.leverage}x`);
+          logger.info(`   ${trade.symbol} 行情质量${mq}，仓位乘数${mqLoMult}×至${trade.amountPercent}%，杠杆降至${trade.leverage}x`);
         } else if (mq < 70) {
-          trade.amountPercent = Math.round(trade.amountPercent * 0.75);
-          logger.info(`   ${trade.symbol} 行情质量${mq}，仓位降至${trade.amountPercent}%`);
+          const mqMdMult = (interceptParamsCache.get("pos_mq_mult_med") ?? 60) / 100;
+          trade.amountPercent = Math.round(trade.amountPercent * mqMdMult);
+          logger.info(`   ${trade.symbol} 行情质量${mq}，仓位乘数${mqMdMult}×至${trade.amountPercent}%`);
         }
 
         // 入场质量硬阻断：方向对应的评分<35不开仓（原<20，收紧以过滤RSI超卖/B追空）
@@ -856,9 +860,9 @@ async function aiDecisionCycle() {
         const equity = account.totalEquity || 1;
         const sideExposure = (existingSideMargin / equity) * 100;
         const newExposure = (newMargin / equity) * 100;
-        const MAX_SIDE_MARGIN = 40;
-        if (sideExposure + newExposure > MAX_SIDE_MARGIN) {
-          const msg = `同方向保证金已达${sideExposure.toFixed(1)}%，新仓${newExposure.toFixed(1)}%>${MAX_SIDE_MARGIN}%上限`;
+        const maxSideMargin = getIntercept("max_side_margin_pct", 40);
+        if (sideExposure + newExposure > maxSideMargin) {
+          const msg = `同方向保证金已达${sideExposure.toFixed(1)}%，新仓${newExposure.toFixed(1)}%>${maxSideMargin}%上限`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: msg });
           logger.info(`⏸️ ${trade.symbol} ${msg}，跳过`);
           continue;

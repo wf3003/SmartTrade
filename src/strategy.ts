@@ -1,7 +1,7 @@
 import { CONFIG } from "./config";
 import { type MarketData, type Position, type AccountInfo } from "./exchanges";
 import { calcIndicators, calcMarketQuality, checkExtremeDeviation, convertCandles, isReversalConfirmed } from "./indicators";
-import { setAtrCache, setRsiCache, setIndicatorCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor } from "./state";
+import { setAtrCache, setRsiCache, setIndicatorCache, getAdjustedScore, getAdjustedLeverage, getAdjustedConfidenceFloor, interceptParamsCache } from "./state";
 import { logger } from "./logger";
 import { runBacktest, generateBacktestSummary, isHighQualitySignal, type BacktestResult } from "./backtest";
 import { insertBacktestLog } from "./db";
@@ -77,7 +77,8 @@ export async function generateStrategyReport(
     const dailyAdx = id.adx;
     // 日线ADX>50时强制跟随日线方向，1h回测的反转信号不适用
     // 反转标志保留给持仓管理用——已有亏损仓位仍按反转平仓
-    if (bt.optimalStrategy === "reversal" && dailyAdx > 58) {
+    const adxOverride = interceptParamsCache.get("strategy_adx_override") ?? 58;
+    if (bt.optimalStrategy === "reversal" && dailyAdx > adxOverride) {
       bt.reversalSignal = true;  // 保留原始反转标志
       bt.optimalStrategy = "continuation";
       bt.confidence = Math.min(100, bt.confidence + 20);
@@ -107,19 +108,27 @@ export async function generateStrategyReport(
     // 取代旧评分逻辑：strategy 不再做方向判断，仅提供指标数据和执行参数
     // AI（agent.ts）基于完整指标独立做方向决策
     const kl = `支撑${(p - i1.atr14 * 2).toFixed(2)} 阻力${(p + i1.atr14 * 2).toFixed(2)}`;
-    // 硬安全规则：极端偏离检查
+    // 硬安全规则：极端偏离检查（参数可调）
+    const devAtm = (interceptParamsCache.get("extreme_dev_atr_mult") ?? 300) / 100;
     const extremeCheck = checkExtremeDeviation(maDist, at, i1.rsi14,
-      p > i1.ema20 ? "short" : "long", 3);
+      p > i1.ema20 ? "short" : "long", devAtm);
     const hasExtremeRisk = extremeCheck.hit;
     // 行情质量评分（影响仓位大小，独立于方向）
     const raw1h = o?.["1h"] || [], raw15m = o?.["15m"] || [], raw5m = o?.["5m"] || [];
     const fr = t.fundingRate !== undefined ? Math.abs(Number(t.fundingRate)) : 0;
     const mq = calcMarketQuality(convertCandles(raw1h), convertCandles(raw15m), convertCandles(raw5m), fr);
-    // 动态止损止盈
-    const dynSlPct = Math.max(2, Math.min(8, at * 2));
-    const dynTpPct = Math.max(4, Math.min(15, at * 4));
-    // 动态杠杆（只看波动率）
-    const volMaxMult = at > 1.5 ? 0.7 : at > 0.8 ? 1.0 : 1.5;
+    // 动态止损止盈（参数可调）
+    const slMult = (interceptParamsCache.get("sl_atr_mult") ?? 200) / 100;
+    const tpMult = (interceptParamsCache.get("tp_atr_mult") ?? 400) / 100;
+    const dynSlPct = Math.max(2, Math.min(8, at * slMult));
+    const dynTpPct = Math.max(4, Math.min(15, at * tpMult));
+    // 动态杠杆（参数可调）
+    const levHi = interceptParamsCache.get("lev_vol_mult_high") ?? 70;
+    const levMid = interceptParamsCache.get("lev_vol_mult_mid") ?? 100;
+    const levLo = interceptParamsCache.get("lev_vol_mult_low") ?? 150;
+    const levThrHi = (interceptParamsCache.get("lev_vol_threshold_high") ?? 150) / 100;
+    const levThrLo = (interceptParamsCache.get("lev_vol_threshold_low") ?? 80) / 100;
+    const volMaxMult = at > levThrHi ? levHi / 100 : at > levThrLo ? levMid / 100 : levLo / 100;
     const dynLeverage = Math.min(CONFIG.maxLeverage,
       Math.round(CONFIG.defaultLeverage * volMaxMult)
     );
@@ -188,7 +197,9 @@ export async function generateStrategyReport(
     // 短期动量：最后5根K线持续反向 + 浮亏 → 趋势可能转坏
     // 强趋势(ADX>55)需要更深浮亏才触发，避免噪音平仓
     const pnl = pos.unrealizedPnlPct || 0;
-    const flipThreshold = i.adx > 55 ? -2.5 : -1.5;
+    const flipThrHi = (interceptParamsCache.get("flip_pnl_threshold_high_adx") ?? -250) / 100;
+    const flipThrLo = (interceptParamsCache.get("flip_pnl_threshold_low_adx") ?? -150) / 100;
+    const flipThreshold = i.adx > 55 ? flipThrHi : flipThrLo;
     const flipContinuation = posBt?.optimalStrategy === "continuation";
     const flip = c.length > 25 && !flipContinuation && (
       (pos.side === "long" && c[c.length-1][4] < c[c.length-6][4] && pnl < flipThreshold) ||
@@ -221,7 +232,9 @@ export async function generateStrategyReport(
     } else {
     // 用回测结果调整极端行情检测：延续模式不轻易平仓
     const skipClose = posBt?.optimalStrategy === "continuation" && (i.adx > 55);
-    const atrMult = posBt?.optimalStrategy === "continuation" ? 4 : 2.5;
+    const devAtmCont = (interceptParamsCache.get("extreme_dev_atr_mult_cont") ?? 400) / 100;
+    const devAtmNorm = (interceptParamsCache.get("extreme_dev_atr_mult") ?? 300) / 100;
+    const atrMult = posBt?.optimalStrategy === "continuation" ? devAtmCont : devAtmNorm;
     const extreme = skipClose ? { hit: false as const, label: "", detail: "" } : checkExtremeDeviation(maDist, at, i.rsi14, pos.side, atrMult);
     if (extreme.hit) {
       ac = "close";

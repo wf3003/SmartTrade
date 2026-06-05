@@ -6,6 +6,7 @@ import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { exchangeManager, type AccountInfo } from "./exchanges";
 import { getTradesToday } from "./db";
+import { interceptParamsCache } from "./state";
 
 // 账户峰值追踪（用于回撤检查）
 let peakEquity = 0;
@@ -91,9 +92,9 @@ export function checkProfitProtect(
   currentPnlPct: number,
 ): { shouldClose: boolean; reason: string } | null {
   if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
-  // 统一安全网：不管利润多大，回撤超75%必须保护（防黑天鹅）
-  // 但不再用层层收紧的阶梯——盈利大就该扛波动
-  const protectLine = peakPnlPct * 0.25;
+  // 回撤保护线由 intercept_params 控制（默认25%=峰值的75%回撤保护）
+  const pct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 25) / 100;
+  const protectLine = peakPnlPct * pct;
   const line = Math.max(protectLine, 1.5);
   if (currentPnlPct < line) {
     return {
