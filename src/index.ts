@@ -185,8 +185,9 @@ async function executeFullClose(
     consecutiveLossCount.set(symbol, losses);
     const maxLosses = getIntercept("max_consecutive_losses", 3);
     if (losses >= maxLosses) {
-      consecutiveLossBlock.set(symbol, Date.now() + 30 * 60000); // 暂停30分钟
-      logger.warn(`🔴 ${symbol} 连续${losses}次亏损≥上限${maxLosses}, 暂停30分钟`);
+      const lossBlockMins = getIntercept("cooldown_first_min", 30);
+      consecutiveLossBlock.set(symbol, Date.now() + lossBlockMins * 60000);
+      logger.warn(`🔴 ${symbol} 连续${losses}次亏损≥上限${maxLosses}, 暂停${lossBlockMins}分钟`);
     }
   } else {
     if (consecutiveLossCount.get(symbol) && (consecutiveLossCount.get(symbol) || 0) >= 1) {
@@ -828,7 +829,7 @@ async function aiDecisionCycle() {
         if (!btPass) {
           const msg = `⏭️ ${trade.symbol} 回测延续${sa?.backtest?.contAccuracy?.toFixed(0)}%反转${sa?.backtest?.revAccuracy?.toFixed(0)}%均<${contMin}%，跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `回测双低` });
-          logger.info(msg); execLog.push(msg); continue;
+          logger.info(msg + ` | cascade: ${cascade.join(" ")}`); execLog.push(msg); continue;
         }
         // ② AI评分<阈值直接跳
         const aiScoreMin = aggrScale(getIntercept("ai_score_min", 40), 20);
@@ -836,7 +837,7 @@ async function aiDecisionCycle() {
         if (aiScore < aiScoreMin) {
           const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<${aiScoreMin}，质量不足跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分${aiScore}<40` });
-          logger.info(msg); execLog.push(msg); continue;
+          logger.info(msg + ` | cascade: ${cascade.join(" ")}`); execLog.push(msg); continue;
         }
         const mq = sa?.sentiment?.marketQuality ?? 50;
         const mqMin = aggrScale(getIntercept("market_quality_min", 20), 10);
@@ -844,7 +845,7 @@ async function aiDecisionCycle() {
         if (mq < mqMin) {
           const msg = `⏭️ ${trade.symbol} 行情质量${mq}<${mqMin}，跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${mq})` });
-          logger.info(msg);
+          logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
           execLog.push(msg);
           continue;
         } else if (mq < 40) {
@@ -868,7 +869,7 @@ async function aiDecisionCycle() {
           if (entryScore < eqMin) {
             const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<${eqMin}，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
-            logger.info(msg);
+            logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
             execLog.push(msg);
             continue;
           } else if (entryScore < eqMin + 20) {
