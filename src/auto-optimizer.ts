@@ -39,14 +39,14 @@ const INDICATORS: { field: string; name: string }[] = [
 
 /** 主入口：运行一轮优化分析 */
 export async function runOptimizer(): Promise<number> {
-  const snapshots = getClosedSnapshots(200) as any[];
-  if (snapshots.length < 5) {
+  const snapshots = getClosedSnapshots(500) as any[];
+  if (snapshots.length < 50) {
     logger.info(`[Optimizer] 样本不足(${snapshots.length})，跳过`);
     return 0;
   }
 
   const baseline = computeBaseline(snapshots);
-  if (baseline.total < 3) return 0;
+  if (baseline.total < 25) return 0;
   logger.info(`[Optimizer] 基线: 样本=${baseline.total} 胜率=${(baseline.winRate * 100).toFixed(0)}%`);
 
   let rulesCreated = 0;
@@ -55,7 +55,7 @@ export async function runOptimizer(): Promise<number> {
   const regimes = collectRegimes(snapshots).filter(r => r !== "all");
   for (const regime of regimes) {
     const snapshotsForRegime = snapshots.filter((s: any) => s.regime && s.regime.includes(regime));
-    if (snapshotsForRegime.length < 5) continue;
+    if (snapshotsForRegime.length < 25) continue;
 
     const regBaseline = computeBaseline(snapshotsForRegime);
     logger.info(`[Optimizer] 行情[${regime}] 样本=${snapshotsForRegime.length} 胜率=${(regBaseline.winRate * 100).toFixed(0)}%`);
@@ -64,7 +64,7 @@ export async function runOptimizer(): Promise<number> {
       const segs = segmentByDeciles(snapshotsForRegime, ind.field, ind.name);
       for (const seg of segs) {
         const segTotal = seg.wins + seg.losses;
-        if (segTotal < 3) continue;
+        if (segTotal < 25) continue;
         const segWr = segTotal > 0 ? seg.wins / segTotal : 0;
         const diff = segWr - regBaseline.winRate;
         if (Math.abs(diff) < 0.15) continue;
@@ -134,7 +134,7 @@ function segmentByDeciles(snapshots: any[], field: string, name: string): Segmen
     .map(s => ({ v: Number(s[field] ?? s[name]), win: s.result === "win" }))
     .filter(x => !isNaN(x.v));
 
-  if (values.length < 5) return [];
+  if (values.length < 25) return [];
 
   values.sort((a, b) => a.v - b.v);
   const segCount = 5;
@@ -270,7 +270,7 @@ export function evaluateUnjudgedDecisions(
 async function generateSignalTypeRules(snapshots: any[], baselineWr: number): Promise<void> {
   // 从 reason/signal_type 字段分析追空/追多
   const chaseShort = snapshots.filter(s => (s.signal_type && s.signal_type.includes("chase_short")) || (s.side === "short" && (s.rsi_1d || 50) < 25));
-  if (chaseShort.length >= 3) {
+  if (chaseShort.length >= 25) {
     const wins = chaseShort.filter(s => s.result === "win").length;
     const wr = wins / chaseShort.length;
     if (wr < baselineWr - 0.15) {
@@ -308,15 +308,15 @@ const COMBO_PAIRS: [string, string, string, string][] = [
  * 只返回胜率显著偏离基线（>20%）且样本 >= 5 的组合。
  */
 export function discoverComboPatterns(): number {
-  const snapshots = getClosedSnapshots(200) as any[];
-  if (snapshots.length < 20) return 0;
+  const snapshots = getClosedSnapshots(500) as any[];
+  if (snapshots.length < 100) return 0;
 
   let created = 0;
   // 按多空分组搜索，防偏态数据污染（如 71笔做空2笔做多）
   const sides = ["short", "long"];
   for (const side of sides) {
     const sideSnapshots = snapshots.filter(s => s.side === side);
-    if (sideSnapshots.length < 10) continue;
+    if (sideSnapshots.length < 50) continue;
     const baseline = sideSnapshots.filter(s => s.result === "win").length / sideSnapshots.length;
 
   for (const [f1, n1, f2, n2] of COMBO_PAIRS) {
@@ -346,7 +346,7 @@ export function discoverComboPatterns(): number {
     }
 
     for (const [k, e] of grid) {
-      if (e.total < 5) continue;
+      if (e.total < 40) continue;
       const wr = e.wins / e.total;
       if (Math.abs(wr - baseline) < 0.20) continue;
       const parts = k.split("_");
@@ -394,8 +394,8 @@ export function detectRuleDrift(): number {
   const rules = getActiveOptRules() as any[];
   if (rules.length === 0) return 0;
 
-  const snapshots = getClosedSnapshots(200) as any[];
-  if (snapshots.length < 10) return 0;
+  const snapshots = getClosedSnapshots(500) as any[];
+  if (snapshots.length < 50) return 0;
 
   let driftCount = 0;
   const now = new Date().toISOString();
@@ -426,12 +426,12 @@ export function detectRuleDrift(): number {
       return true;
     });
 
-    if (matches.length < 5) continue;
+    if (matches.length < 40) continue;
     const observedWins = matches.filter(s => s.result === "win").length;
     const observedWr = observedWins / matches.length;
     const driftScore = (rule.win_rate || 0.5) - observedWr;
 
-    const isDrifting = driftScore > 0.20 && matches.length >= 8;
+    const isDrifting = driftScore > 0.20 && matches.length >= 60;
     insertRulePerformance({
       rule_id: rule.id, check_time: now, recent_samples: matches.length,
       observed_win_rate: Math.round(observedWr * 10000) / 100,

@@ -103,6 +103,12 @@ export function applyOptRules(
     const v_fr = getIndicatorValue("funding_rate", rsi_1h, adx_1h, rsi_1d, adx_1d, atrPct, emaDistPct, fundingRate, volume24h, marketQuality, entryQuality);
     if (v_fr !== null && v_fr > 0.03) { score = Math.round(score * 0.4); logs.push("[硬]费率>0.03% 做多 ×0.4"); }
   }
+  // 低费率+低RSI做空联合惩罚（防AAVE式止损：费率0.005%/RSI35做空被反弹）
+  // 注：负费率（多头付费）做空有利，不惩罚
+  if (side === "short" && fundingRate >= 0 && fundingRate < 0.01 && rsi_1h > 0 && rsi_1h < 40) {
+    score = Math.round(score * 0.6);
+    logs.push(`[联合]低费率(${(fundingRate*100).toFixed(3)}%)+低RSI(${rsi_1h.toFixed(0)})做空 ×0.6`);
+  }
   // 收集当前行情下已匹配的 indicator（防 "all" 规则与特定行情规则叠加）
   // combo 规则也纳入 dedup key，防止组合规则和单指标规则双重命中
   const matchedIndicators = new Set<string>();

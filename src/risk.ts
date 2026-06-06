@@ -102,11 +102,21 @@ export function checkProfitProtect(
     : peakPnlPct * 0.3;
   const trailLine = peakPnlPct - trailDist;
 
-  // 固定回撤保护线（硬兜底）
+  // 阶梯式回撤保护：峰值越高，保护越紧（防59%→14%式大幅回吐）
+  let protectRatio: number;
+  if (peakPnlPct > 50) {
+    protectRatio = 0.60; // 峰值>50%→保留60%，最多回撤40%
+  } else if (peakPnlPct > 30) {
+    protectRatio = 0.55; // 峰值>30%→保留55%
+  } else if (peakPnlPct > 15) {
+    protectRatio = 0.45; // 峰值>15%→保留45%
+  } else {
+    protectRatio = 0.35; // 峰值≤15%→保留35%（原有逻辑）
+  }
   const fullPct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 25) / 100;
-  const fullLine = Math.max(peakPnlPct * fullPct, 1.5);
+  const fullLine = Math.max(peakPnlPct * Math.max(protectRatio, fullPct), 1.5);
 
-  // 取较紧的线：ATR 跟踪 vs 固定回撤，谁先触发用谁
+  // 取较紧的线：ATR 跟踪 vs 阶梯回撤，谁先触发用谁
   const useLine = Math.max(trailLine, fullLine);
 
   if (currentPnlPct < useLine) {

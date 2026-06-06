@@ -60,6 +60,11 @@ const consecutiveStopCount = new Map<string, number>();
 // 同一币种连续亏损计数（实时阻断，不等复盘）
 const consecutiveLossCount = new Map<string, number>();
 const consecutiveLossBlock = new Map<string, number>(); // blockUntil timestamp
+// 参数调整阻尼：防AI复盘反复调参
+const lastParamAdjustCycle = new Map<string, number>(); // param → 上次调整的周期号
+const PARAM_ADJUST_COOLDOWN_CYCLES = 6; // 同一参数至少隔6个周期才能再调
+const PARAM_EMA_ALPHA = 0.35; // EMA平滑系数：新值 = 旧值×(1-α) + AI建议值×α
+const PARAM_MIN_CLOSED_TRADES = 3; // 最少闭环交易数才允许调整参数
 
 function getIntercept(name: string, fallback: number): number {
   return interceptParamsCache.get(name) ?? fallback;
@@ -824,23 +829,16 @@ async function aiDecisionCycle() {
         const ticker = tickers.get(trade.symbol);
 
         // ===== 硬性信号过滤：AI复盘反复验证的亏损规律，代码级阻断 =====
-        // ① 回测延续率<55%且反转<55%的币种不追（AI证实: AAVE延续率仅50%导致4败）
-        const contMin = aggrScale(getIntercept("cont_accuracy_min", 55), 20);
-        const revMin = aggrScale(getIntercept("rev_accuracy_min", 55), 15);
-        const btPass = !(sa?.backtest && sa.backtest.contAccuracy != null && sa.backtest.contAccuracy < contMin && sa.backtest.revAccuracy != null && sa.backtest.revAccuracy < revMin);
-        ck("backtest", btPass);
-        if (!btPass) {
-          const msg = `⏭️ ${trade.symbol} 回测延续${sa?.backtest?.contAccuracy?.toFixed(0)}%反转${sa?.backtest?.revAccuracy?.toFixed(0)}%均<${contMin}%，跳过`;
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `回测双低` });
-          logger.info(msg + ` | cascade: ${cascade.join(" ")}`); execLog.push(msg); continue;
-        }
+
         // ② AI评分<阈值直接跳
         const aiScoreMin = aggrScale(getIntercept("ai_score_min", 40), 20);
         ck(`AI(${aiScore})`, aiScore >= aiScoreMin);
         if (aiScore < aiScoreMin) {
           const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<${aiScoreMin}，质量不足跳过`;
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分${aiScore}<40` });
-          logger.info(msg + ` | cascade: ${cascade.join(" ")}`); execLog.push(msg); continue;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分不足` });
+          logger.info(msg + ` | cascade: ${cascade.join(" ")}`); execLog.push(msg);
+          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+          continue;
         }
         const mq = sa?.sentiment?.marketQuality ?? 50;
         const mqMin = aggrScale(getIntercept("market_quality_min", 20), 10);
@@ -850,6 +848,7 @@ async function aiDecisionCycle() {
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${mq})` });
           logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
           execLog.push(msg);
+          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, mq }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
           continue;
         } else if (mq < 40) {
           const mqLoMult = (interceptParamsCache.get("pos_mq_mult_low") ?? 40) / 100;
@@ -874,6 +873,7 @@ async function aiDecisionCycle() {
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
             logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
             execLog.push(msg);
+            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, entryScore }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
             continue;
           } else if (entryScore < eqMin + 20) {
             trade.amountPercent = Math.round(trade.amountPercent * 0.5);
@@ -883,6 +883,7 @@ async function aiDecisionCycle() {
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "入场质量unfavorable" });
             logger.info(msg);
             execLog.push(msg);
+            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
             continue;
           }
         }
@@ -909,6 +910,7 @@ async function aiDecisionCycle() {
           const msg = `同方向保证金已达${sideExposure.toFixed(1)}%，新仓${newExposure.toFixed(1)}%>${maxSideMargin}%上限`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: msg });
           logger.info(`⏸️ ${trade.symbol} ${msg}，跳过`);
+          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
           continue;
         }
 
@@ -1068,7 +1070,39 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
     // 获取近期AI决策历史（含AI评分和理由）
     const recentDecisions = (db.prepare("SELECT symbol, action, reason, status, raw_response FROM decisions WHERE raw_response IS NOT NULL AND raw_response != '' AND time > datetime('now', '-2 hours') ORDER BY id DESC LIMIT 20").all() as any[]) as any[];
     const decAnalysis = buildDecisionAnalysis(recentDecisions);
-    const review = await aiTradeReview(tradeSummary, symbolStats, configStr, openSummary, btSummary, decAnalysis);
+    // 回望评估被拦截信号：决策时价格 vs 当前价格 → 如果开了仓现在盈亏多少
+    const skippedDecisions = db.prepare(
+      "SELECT symbol, action, reason, status, raw_response FROM decisions WHERE status='skipped' AND raw_response IS NOT NULL AND raw_response != '' AND time > datetime('now', '-2 hours') ORDER BY id DESC LIMIT 100"
+    ).all() as any[];
+    let skippedAnalysis = "";
+    if (skippedDecisions.length > 0) {
+      const bySymbol: Record<string, { skipped: number; wouldWin: number; wouldLose: number }> = {};
+      for (const d of skippedDecisions) {
+        try {
+          const raw = JSON.parse(d.raw_response);
+          const priceAt = raw.price;
+          if (!priceAt || priceAt <= 0) continue;
+          const ticker = tickers.get(d.symbol);
+          if (!ticker?.price || ticker.price <= 0) continue;
+          const changePct = (ticker.price - priceAt) / priceAt * 100;
+          const wouldProfit = d.action === "sell" ? changePct < -0.5 : changePct > 0.5;
+          const wouldLoss = d.action === "sell" ? changePct > 0.5 : changePct < -0.5;
+          if (!bySymbol[d.symbol]) bySymbol[d.symbol] = { skipped: 0, wouldWin: 0, wouldLose: 0 };
+          bySymbol[d.symbol].skipped++;
+          if (wouldProfit) bySymbol[d.symbol].wouldWin++;
+          if (wouldLoss) bySymbol[d.symbol].wouldLose++;
+        } catch {}
+      }
+      const lines = Object.entries(bySymbol).map(([sym, s]) =>
+        `  ${sym}: 被拦${s.skipped}次 | 若开仓→盈利${s.wouldWin}/亏损${s.wouldLose}/中性${s.skipped-s.wouldWin-s.wouldLose}`
+      );
+      if (lines.length > 0) {
+        skippedAnalysis = "\n【被拦截信号回望评估（决策时价格 vs 当前价格）】\n" + lines.join("\n") +
+          "\n请判断：拦截是否正确？哪些被拦信号若开仓会盈利（说明过滤太严），哪些被拦信号若开仓会亏损（说明过滤正确）？";
+      }
+    }
+    const fullDecAnalysis = decAnalysis + skippedAnalysis;
+    const review = await aiTradeReview(tradeSummary, symbolStats, configStr, openSummary, btSummary, fullDecAnalysis);
     if (review && review.length > 10) {
       logger.info(`📊 AI 交易复盘(周期#${currentCycle}):\n${review}`);
       // 解析复盘结果，将 AI 建议回馈到策略引擎参数
@@ -1096,17 +1130,33 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
         if (Array.isArray(parsed.suggestions)) {
           applyReviewSuggestions(parsed.suggestions);
         }
-        // 4. AI建议调整拦截参数
+        // 4. AI建议调整拦截参数（带阻尼：冷却+EMA平滑+最少交易数）
         if (Array.isArray(parsed.adjustIntercepts)) {
+          const closedTrades = allTrades.filter((t: any) => t.status === "closed");
+          const canAdjust = closedTrades.length >= PARAM_MIN_CLOSED_TRADES;
           for (const adj of parsed.adjustIntercepts) {
             if (adj.param && typeof adj.param === "string" && typeof adj.value === "number") {
               const cur = interceptParamsCache.get(adj.param);
-              if (cur !== undefined && Math.abs(adj.value - cur) / cur > 0.05) {
-                // 只接受 > 5% 的变动，防微小抖动
+              if (cur === undefined) continue;
+              // 阻尼1: 最少闭环交易数
+              if (!canAdjust) {
+                logger.info(`⚙️ 参数跳过: ${adj.param} 闭环交易不足(${closedTrades.length}<${PARAM_MIN_CLOSED_TRADES})`);
+                continue;
+              }
+              // 阻尼2: 冷却期检查（同一参数至少隔6周期再调）
+              const lastCycle = lastParamAdjustCycle.get(adj.param) || 0;
+              if (currentCycle - lastCycle < PARAM_ADJUST_COOLDOWN_CYCLES) {
+                logger.info(`⚙️ 参数跳过: ${adj.param} 冷却中(${currentCycle - lastCycle}/${PARAM_ADJUST_COOLDOWN_CYCLES}周期)`);
+                continue;
+              }
+              // 阻尼3: EMA平滑，防AI反复横跳
+              const smoothed = Math.round(cur * (1 - PARAM_EMA_ALPHA) + adj.value * PARAM_EMA_ALPHA);
+              if (Math.abs(smoothed - cur) / Math.max(Math.abs(cur), 1) > 0.05) {
                 const { updateInterceptParam } = await import("./db");
-                updateInterceptParam(adj.param, Math.round(adj.value));
-                interceptParamsCache.set(adj.param, Math.round(adj.value));
-                logger.info(`⚙️ AI调整拦截参数: ${adj.param} ${cur}→${Math.round(adj.value)} (${adj.reason || ""})`);
+                updateInterceptParam(adj.param, smoothed);
+                interceptParamsCache.set(adj.param, smoothed);
+                lastParamAdjustCycle.set(adj.param, currentCycle);
+                logger.info(`⚙️ AI调整拦截参数: ${adj.param} ${cur}→${smoothed}(EMA,建议${Math.round(adj.value)}) (${adj.reason || ""})`);
               }
             }
           }
