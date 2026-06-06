@@ -275,8 +275,19 @@ async function executeFullOpen(
 ): Promise<{ success: boolean; fillPrice: number; error?: string }> {
   try {
     const openResult = await exchangeManager.openPosition(symbol, side, qty, leverage);
-    updateDecisionStatus(decId, "success");
     const fillPrice = openResult.avgPrice || tickerPrice;
+
+    // 验证持仓：等1.5秒让交易所结算后确认确实有持仓
+    await new Promise(r => setTimeout(r, 1500));
+    const allPos = await exchangeManager.getPositions();
+    const confirmed = allPos?.find((p: any) => p.symbol === symbol && p.side === side);
+    if (!confirmed) {
+      updateDecisionStatus(decId, "failed");
+      logger.warn(`⚠️ 开仓未确认: ${symbol} ${side} ${qty}张 — 交易所无对应持仓`);
+      return { success: false, fillPrice: 0, error: "交易所未确认持仓" };
+    }
+
+    updateDecisionStatus(decId, "success");
     const contractSize = exchangeManager.getContractSize(symbol);
     const notional = qty * fillPrice * contractSize;
     insertTrade({
