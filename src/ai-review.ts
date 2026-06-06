@@ -101,15 +101,20 @@ ${symbolStats}
 
     const text = resp.choices?.[0]?.message?.content || "{}";
     if (text === "{}" || text.length < 20) {
-      logger.warn(`[复盘] AI 返回过短: ${text.slice(0, 100)}`);
+      logger.warn(`[复盘] AI 返回过短(${text.length}字): ${text.slice(0, 150)}`);
       return "";
     }
-    const parsed = JSON.parse(text);
-    if (parsed.summary || parsed.winners || parsed.losers || parsed.suggestions) {
-      return JSON.stringify(parsed, null, 2);
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.summary || parsed.winners || parsed.losers || parsed.suggestions) {
+        return JSON.stringify(parsed, null, 2);
+      }
+      logger.warn(`[复盘] 缺关键字段: ${text.slice(0, 300)}`);
+      return "";
+    } catch {
+      logger.warn(`[复盘] 非JSON(${text.length}字): ${text.slice(0, 200)}`);
+      return "";
     }
-    logger.warn(`[复盘] AI 返回缺关键字段: ${text.slice(0, 200)}`);
-    return "";
   } catch (e: any) {
     logger.warn(`[复盘] 异常: ${e.message?.slice(0, 200)}`);
     return "";
