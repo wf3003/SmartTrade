@@ -614,6 +614,15 @@ async function monitorPositions() {
         logger.warn(`🔧 同步: ${t.symbol} 交易所已无，关闭DB记录`);
       }
     }
+    // C. 主记录的 qty/price 与交易所同步（追仓后修复主记录滞后）
+    for (const pos of uniquePositions) {
+      const dbTrade = getLatestOpenTrades().get(pos.symbol);
+      if (dbTrade && (Math.abs(dbTrade.entry_qty - pos.qty) > 0.01 || Math.abs(dbTrade.entry_price - pos.entryPrice) > 0.001)) {
+        db.prepare("UPDATE trades SET entry_qty=?, entry_price=? WHERE id=?")
+          .run(pos.qty, pos.entryPrice, dbTrade.id);
+        logger.info(`🔧 同步: ${pos.symbol} qty ${dbTrade.entry_qty}→${pos.qty} price ${dbTrade.entry_price?.toFixed(4)}→${pos.entryPrice?.toFixed(4)}`);
+      }
+    }
 
     // 账户快照（每 60 秒只存一次，减少写库频率）
     const now = Date.now();
