@@ -15,7 +15,7 @@
  * - 评估结果作为 independent_snapshots 的补充，一起参与统计。
  */
 import { logger } from "./logger";
-import { db, getClosedSnapshots, getUnevaluatedDecisions, insertDecisionEvaluation, upsertOptRule, getActiveOptRules, insertRulePerformance, getRulePerformanceHistory, disableOptRule } from "./db";
+import { db, getClosedSnapshots, getAllEvaluations, getUnevaluatedDecisions, insertDecisionEvaluation, upsertOptRule, getActiveOptRules, insertRulePerformance, getRulePerformanceHistory, disableOptRule } from "./db";
 
 interface Segment {
   label: string;
@@ -37,9 +37,38 @@ const INDICATORS: { field: string; name: string }[] = [
   { field: "entry_quality", name: "entry_quality" },
 ];
 
+/** 从 decision_evaluations 将回望评估结果转换为快照格式（补充实际交易样本） */
+function evalToSnapshots(): any[] {
+  const evals = getAllEvaluations(1000) as any[];
+  const results: any[] = [];
+  for (const e of evals) {
+    // evaluation 字段映射：correct_trade/correct_skip=win, wrong_trade/missed_opportunity=loss
+    let result: string | null = null;
+    if (e.evaluation === "correct_trade" || e.evaluation === "correct_skip") result = "win";
+    else if (e.evaluation === "wrong_trade" || e.evaluation === "missed_opportunity") result = "loss";
+    if (!result) continue;
+    // 从 action 推断 side
+    const side = e.action === "buy" ? "long" : e.action === "sell" ? "short" : "unknown";
+    results.push({
+      result, side,
+      regime: e.regime ?? "", // 从 snapshot 联表获取（无 snapshot 时为空）
+      rsi_1h: e.rsi_1h, rsi_1d: e.rsi_1d,
+      adx_1h: e.adx_1h, adx_1d: e.adx_1d,
+      atr_pct: e.atr_pct, ema_dist_pct: e.ema_dist_pct,
+      funding_rate: e.funding_rate, volume_24h: e.volume_24h,
+      market_quality: e.market_quality, entry_quality: e.entry_quality,
+    });
+  }
+  return results;
+}
+
 /** 主入口：运行一轮优化分析 */
 export async function runOptimizer(): Promise<number> {
-  const snapshots = getClosedSnapshots(500) as any[];
+  const closedSnaps = getClosedSnapshots(500) as any[];
+  const evals = evalToSnapshots();
+  // 合并实际交易快照 + 回望评估（评估中没有指标值的记录会被 segmentByDeciles 自动过滤）
+  const snapshots = [...closedSnaps, ...evals];
+  logger.info(`[Optimizer] 实际交易${closedSnaps.length}笔 + 回望评估${evals.length}条 = ${snapshots.length}总样本`);
   if (snapshots.length < 50) {
     logger.info(`[Optimizer] 样本不足(${snapshots.length})，跳过`);
     return 0;
