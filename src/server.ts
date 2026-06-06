@@ -63,7 +63,7 @@ export async function startServer(host?: string, port?: number) {
       const decisions = getDecisionsToday().filter((d: any) => d.time >= cycleStartTime);
       // 交易记录：本地 trades 表（沙盒无历史API）
       const allTrades = getTradesHistory(7) as any[];
-      const trades = allTrades.filter(t => t.status === 'open' || t.status === 'closed');
+      const trades = allTrades.filter(t => (t.status === 'open' || t.status === 'closed') && !['partial_open','partial_close'].includes(t.close_type));
 
       const equityHistory = (db.prepare(
         `SELECT time, total_equity FROM account_snapshots ORDER BY id DESC LIMIT 2000`

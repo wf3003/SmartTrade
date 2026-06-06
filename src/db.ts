@@ -221,7 +221,7 @@ export function getDecisionsHistory(days: number = 7) {
 }
 
 export function getTradesHistory(days: number = 7) {
-  return db.prepare("SELECT * FROM trades WHERE entry_time >= ? ORDER BY id DESC").all(daysAgoStr(days));
+  return db.prepare("SELECT * FROM trades WHERE entry_time >= ? AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC").all(daysAgoStr(days));
 }
 
 export function getTradeStats(days: number = 7) {
