@@ -97,9 +97,11 @@ export function checkProfitProtect(
 
   // ATR跟踪止盈：trail = peak - (atr% × 杠杆 × trail_mult), 至少要保峰值的10%
   const trailMult = (interceptParamsCache.get("trail_pnl_atr_mult") ?? 150) / 100;
-  const trailDist = atrPct > 0 && leverage > 1
+  let trailDist = atrPct > 0 && leverage > 1
     ? Math.max(atrPct * leverage * trailMult, peakPnlPct * 0.1)
     : peakPnlPct * 0.3;
+  // 盈利>10%时锁紧：回撤最多3个百分点即平仓，防利润在反弹中扫没
+  if (peakPnlPct > 10) trailDist = Math.min(trailDist, 3);
   const trailLine = peakPnlPct - trailDist;
 
   // 阶梯式回撤保护：峰值越高，保护越紧（防59%→14%式大幅回吐）
