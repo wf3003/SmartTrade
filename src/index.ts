@@ -291,6 +291,25 @@ async function executeFullOpen(
     }
 
     updateDecisionStatus(decId, "success");
+
+    // 检测是否已有持仓 → 追仓模式：合并到已有记录，不从交易所覆盖
+    const existingTrade = db.prepare(
+      "SELECT id, entry_qty, entry_price, leverage FROM trades WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1"
+    ).get(symbol) as any;
+
+    if (existingTrade) {
+      const safeLev = Math.min(leverage, existingTrade.leverage || leverage);
+      db.prepare("UPDATE trades SET entry_qty=?, entry_price=?, leverage=? WHERE id=?")
+        .run(confirmed.qty, confirmed.entryPrice, safeLev, existingTrade.id);
+      db.prepare(`INSERT INTO trades (exchange, symbol, side, leverage, entry_price, entry_qty, entry_time, reason, status, close_type, parent_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 'partial_open', ?)`)
+        .run(CONFIG.exchanges[0], symbol, side, safeLev, fillPrice, qty, new Date().toISOString(), reason, existingTrade.id);
+      peakPnlMap.delete(symbol);
+      logger.warn(`✅ 追仓: ${symbol} ${side} +${qty}张 @$${fillPrice} ${safeLev}x (交易所合并:${confirmed.qty}张 @$${confirmed.entryPrice})`);
+      return { success: true, fillPrice };
+    }
+
+    // 首次开仓：正常 INSERT
     const contractSize = exchangeManager.getContractSize(symbol);
     const notional = qty * fillPrice * contractSize;
     insertTrade({
@@ -794,7 +813,7 @@ async function aiDecisionCycle() {
       for (const trade of report.newTrades) {
         if (openedThisCycle >= MAX_NEW_PER_CYCLE) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "每周期开仓已达上限" }); logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
         // 方向由AI决定，strategy仅给出参考方向
-        if (existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "已有持仓" }); logger.info(`已有 ${trade.symbol} 持仓，跳过`); continue; }
+        // 已有持仓 → 追仓模式，由 executeFullOpen 合并处理，不再跳过
         // 连败阻断: N次连续亏损后暂停该币种 (不等复盘直接拦)
         if (consecutiveLossBlock.has(trade.symbol) && (consecutiveLossBlock.get(trade.symbol) || 0) > Date.now()) {
           const until = new Date(consecutiveLossBlock.get(trade.symbol) || 0).toISOString();
