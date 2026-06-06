@@ -108,6 +108,7 @@ const openedThisSession = new Set<string>();
 let _lastExtremeWarnTs: Map<string, number> | undefined;
 // 监控同步防误重建：记录最近 30s 内被关掉的仓位
 const _recentlyClosed = new Set<string>();
+const _recentlyOpened = new Set<string>();
 // 盈利回吐减半：记录最近已减过的币种（防每2s重复减）
 const _halfClosed = new Set<string>();
 
@@ -276,6 +277,8 @@ async function executeFullOpen(
   try {
     const openResult = await exchangeManager.openPosition(symbol, side, qty, leverage);
     const fillPrice = openResult.avgPrice || tickerPrice;
+    _recentlyOpened.add(symbol);
+    setTimeout(() => _recentlyOpened.delete(symbol), 15000);
 
     // 验证持仓：等1.5秒让交易所结算后确认确实有持仓
     await new Promise(r => setTimeout(r, 1500));
@@ -567,6 +570,7 @@ async function monitorPositions() {
     for (const pos of uniquePositions) {
       if (closedThisCycle.has(pos.symbol)) continue; // 本轮已止损/止盈平仓，不补建
       if (_recentlyClosed.has(pos.symbol)) continue; // 最近被AI/策略关掉，等待交易所结算
+      if (_recentlyOpened.has(pos.symbol)) continue; // 最近开仓未入库，等待DB写入
       if (!dbOpen.find((t: any) => t.symbol === pos.symbol)) {
         const existing = (db.prepare("SELECT id FROM trades WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1").get(pos.symbol) as any);
         if (!existing) {
