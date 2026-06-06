@@ -873,22 +873,24 @@ async function aiDecisionCycle() {
         }
 
         // 入场质量硬阻断：方向对应的评分<35不开仓（原<20，收紧以过滤RSI超卖/B追空）
+        // AI评分≥70的高信心信号放宽EQ门槛至25，防止BB下轨在强趋势中误拦优质空单
         if (sa?.entryQuality) {
           const entryScore = trade.action === "buy"
             ? sa.entryQuality.longEntryScore
             : sa.entryQuality.shortEntryScore;
           const eqMin = aggrScale(getIntercept("entry_quality_min", 35), 15);
-          ck(`EQ(${trade.action})`, entryScore >= eqMin);
-          if (entryScore < eqMin) {
-            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<${eqMin}，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
+          const eqThreshold = aiScore >= 70 ? Math.min(eqMin, 25) : eqMin;
+          ck(`EQ(${trade.action})`, entryScore >= eqThreshold);
+          if (entryScore < eqThreshold) {
+            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<${eqThreshold}，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
             logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
             execLog.push(msg);
             try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, entryScore }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
             continue;
-          } else if (entryScore < eqMin + 20) {
+          } else if (entryScore < eqThreshold + 20) {
             trade.amountPercent = Math.round(trade.amountPercent * 0.5);
-            logger.info(`   ${trade.symbol} 入场质量${entryScore}<${eqMin+20}，仓位减半至${trade.amountPercent}%`);
+            logger.info(`   ${trade.symbol} 入场质量${entryScore}<${eqThreshold+20}，仓位减半至${trade.amountPercent}%`);
           } else if (sa.entryQuality.suggestion === "unfavorable") {
             const msg = `⏭️ ${trade.symbol} 入场质量评级 unfavorable，当前周期不开新仓`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "入场质量unfavorable" });
