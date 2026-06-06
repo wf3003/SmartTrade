@@ -1085,11 +1085,11 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
     const btLogs = db.prepare("SELECT symbol, optimal_strategy, confidence, best_tf FROM backtest_logs WHERE time > datetime('now', '-1 hour') ORDER BY id DESC LIMIT 50").all() as any[];
     const btSummary = btLogs.length > 0 ? btLogs.map((l: any) => `${l.symbol}: ${l.optimal_strategy}(cf${l.confidence}% ${l.best_tf})`).join("\n") : "";
     // 获取近期AI决策历史（含AI评分和理由）
-    const recentDecisions = (db.prepare("SELECT symbol, action, reason, status, raw_response FROM decisions WHERE raw_response IS NOT NULL AND raw_response != '' AND time > datetime('now', '-2 hours') ORDER BY id DESC LIMIT 20").all() as any[]) as any[];
+    const recentDecisions = (db.prepare("SELECT symbol, action, reason, status, raw_response FROM decisions WHERE raw_response IS NOT NULL AND raw_response != '' AND time > datetime('now', '-2 hours') ORDER BY id DESC LIMIT 10").all() as any[]) as any[];
     const decAnalysis = buildDecisionAnalysis(recentDecisions);
     // 回望评估被拦截信号：决策时价格 vs 当前价格 → 如果开了仓现在盈亏多少
     const skippedDecisions = db.prepare(
-      "SELECT symbol, action, reason, status, raw_response FROM decisions WHERE status='skipped' AND raw_response IS NOT NULL AND raw_response != '' AND time > datetime('now', '-2 hours') ORDER BY id DESC LIMIT 100"
+      "SELECT symbol, action, reason, status, raw_response FROM decisions WHERE status='skipped' AND raw_response IS NOT NULL AND raw_response != '' AND time > datetime('now', '-2 hours') ORDER BY id DESC LIMIT 30"
     ).all() as any[];
     let skippedAnalysis = "";
     if (skippedDecisions.length > 0) {
