@@ -184,7 +184,8 @@ async function refresh(){
       $("pos-table").innerHTML=pos.map(p=>{
         const c=sc(p.unrealizedPnl);
         const sideLabel = p.side==="long"?"做多":"做空";
-        const t = d.recentTrades?.find(function(x){return x.symbol===p.symbol && x.status==="open";});
+        // 追仓后同币种有多条 open 记录，取最早的开仓时间（首次入场）
+        const t = (d.recentTrades||[]).filter(function(x){return x.symbol===p.symbol && x.status==="open";}).sort(function(a,b){return a.entry_time < b.entry_time ? -1 : a.entry_time > b.entry_time ? 1 : 0;})[0];
         const et = t?dt(t.entry_time):"-";
         return `<tr><td class="num" style="color:#8b949e;font-size:13px">${et}</td><td><b>${p.symbol}</b></td><td><span class="badge ${p.side==="long"?"long-badge":"short-badge"}">${sideLabel}</span></td><td class="num">${p.leverage}x</td><td class="num">$${sa(p.entryPrice,4)}</td><td class="num">$${sa(p.markPrice,4)}</td><td class="num">${p.qty||0}</td><td class="num ${c}">$${sa(p.unrealizedPnl,2)}</td><td class="num ${c}">${sa(p.unrealizedPnlPct,2)}%</td><td class="num">$${sa(p.margin,2)}</td></tr>`;
       }).join("");

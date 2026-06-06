@@ -292,9 +292,9 @@ async function executeFullOpen(
 
     updateDecisionStatus(decId, "success");
 
-    // 检测是否已有持仓 → 追仓模式：合并到已有记录，不从交易所覆盖
+    // 检测是否已有持仓 → 追仓模式：合并到已有记录，排除 partial_open 子记录
     const existingTrade = db.prepare(
-      "SELECT id, entry_qty, entry_price, leverage FROM trades WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1"
+      "SELECT id, entry_qty, entry_price, leverage FROM trades WHERE symbol=? AND status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1"
     ).get(symbol) as any;
 
     if (existingTrade) {
@@ -591,7 +591,7 @@ async function monitorPositions() {
       if (_recentlyClosed.has(pos.symbol)) continue; // 最近被AI/策略关掉，等待交易所结算
       if (_recentlyOpened.has(pos.symbol)) continue; // 最近开仓未入库，等待DB写入
       if (!dbOpen.find((t: any) => t.symbol === pos.symbol)) {
-        const existing = (db.prepare("SELECT id FROM trades WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1").get(pos.symbol) as any);
+        const existing = (db.prepare("SELECT id FROM trades WHERE symbol=? AND status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1").get(pos.symbol) as any);
         if (!existing) {
           insertTrade({
             exchange: CONFIG.exchanges[0], symbol: pos.symbol, side: pos.side,
@@ -871,7 +871,7 @@ async function aiDecisionCycle() {
           const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<${aiScoreMin}，质量不足跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分不足` });
           logger.info(msg + ` | cascade: ${cascade.join(" ")}`); execLog.push(msg);
-          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
           continue;
         }
         const mq = sa?.sentiment?.marketQuality ?? 50;
@@ -882,7 +882,7 @@ async function aiDecisionCycle() {
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${mq})` });
           logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
           execLog.push(msg);
-          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, mq }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, mq }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
           continue;
         } else if (mq < 40) {
           const mqLoMult = (interceptParamsCache.get("pos_mq_mult_low") ?? 40) / 100;
@@ -909,7 +909,7 @@ async function aiDecisionCycle() {
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
             logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
             execLog.push(msg);
-            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, entryScore }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, entryScore }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
             continue;
           } else if (entryScore < eqThreshold + 20) {
             trade.amountPercent = Math.round(trade.amountPercent * 0.5);
@@ -919,7 +919,7 @@ async function aiDecisionCycle() {
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "入场质量unfavorable" });
             logger.info(msg);
             execLog.push(msg);
-            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
             continue;
           }
         }
@@ -946,7 +946,7 @@ async function aiDecisionCycle() {
           const msg = `同方向保证金已达${sideExposure.toFixed(1)}%，新仓${newExposure.toFixed(1)}%>${maxSideMargin}%上限`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: msg });
           logger.info(`⏸️ ${trade.symbol} ${msg}，跳过`);
-          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) } as any); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
           continue;
         }
 
@@ -1058,7 +1058,7 @@ async function aiDecisionCycle() {
           openedThisCycle++;
           newPositionTime.set(trade.symbol, Date.now());
           // 回写 snapshot 的 trade_id
-          const dbTradeRow = db.prepare("SELECT id FROM trades WHERE symbol = ? AND status = 'open' ORDER BY id DESC LIMIT 1").get(trade.symbol) as any;
+          const dbTradeRow = db.prepare("SELECT id FROM trades WHERE symbol = ? AND status = 'open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1").get(trade.symbol) as any;
           if (dbTradeRow) {
             const snapId2 = snapshotIdMap.get(trade.symbol);
             if (snapId2) linkSnapshotToTrade(snapId2, dbTradeRow.id);

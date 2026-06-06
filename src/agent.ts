@@ -159,6 +159,7 @@ ${scoringAdvice}
 
 ### 3. 新开仓
 基于策略分析给出 buy/sell/hold 决策。
+- 已有持仓的币种可以继续开仓（追仓），系统自动合并管理仓位
 - 杠杆不超过风控策略的 suggestedLeverage
 - 仓位不超过风控策略的 suggestedAmountPct
 - 止损/止盈参考风控策略的 suggestedStopLossPct / suggestedTakeProfitPct

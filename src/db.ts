@@ -187,7 +187,9 @@ db.exec(`
 logger.info("数据库已连接: " + dbPath);
 
 // 日期辅助函数
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const pad = (n: number) => String(n).padStart(2, "0");
+const localDateStr = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const todayStr = () => localDateStr(new Date());
 const daysAgoStr = (days: number) => new Date(Date.now() - days * 86400000).toISOString();
 
 // 查询工具函数
@@ -195,13 +197,15 @@ export function getOpenPositions() {
   return db.prepare("SELECT * FROM trades WHERE status = 'open' AND (close_type IS NULL OR close_type = '')").all();
 }
 
-/** 获取每个币种最新的 open 记录（防重复 open 导致峰值写错行） */
+/** 获取每个币种最新的 open 主记录（排除 partial_open/close 子记录） */
 export function getLatestOpenTrades(): Map<string, any> {
   const rows = db.prepare(`
     SELECT * FROM trades 
-    WHERE status='open' AND id IN (
-      SELECT MAX(id) FROM trades WHERE status='open' GROUP BY symbol
-    )
+    WHERE status='open'
+      AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close'))
+      AND id IN (
+        SELECT MAX(id) FROM trades WHERE status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) GROUP BY symbol
+      )
   `).all() as any[];
   const map = new Map<string, any>();
   for (const r of rows) map.set(r.symbol, r);
@@ -240,7 +244,7 @@ export function getTradeStats(days: number = 7) {
     else bySymbol[t.symbol].losses++;
     bySymbol[t.symbol].pnl += t.pnl || 0;
   }
-  const open = db.prepare("SELECT COUNT(*) as count FROM trades WHERE status='open' AND entry_time >= ?").get(since) as any;
+  const open = db.prepare("SELECT COUNT(*) as count FROM trades WHERE status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) AND entry_time >= ?").get(since) as any;
   return {
     totalClosed: closed.length,
     totalOpen: open?.count || 0,
@@ -255,14 +259,15 @@ export function getTradeStats(days: number = 7) {
 }
 
 export function insertDecision(d: {
-  time: string; ai_model: string; signal: string; symbol: string;
+  time: string; ai_model?: string; signal: string; symbol: string;
   action: string; leverage: number; amount: number; reason: string;
   confidence: number; raw_response: string;
 }) {
+  const model = d.ai_model || CONFIG.ai.model;
   const info = db.prepare(`
     INSERT INTO decisions (time, ai_model, signal, symbol, action, leverage, amount, reason, confidence, raw_response, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-  `).run(d.time, d.ai_model, d.signal, d.symbol, d.action, d.leverage, d.amount, d.reason, d.confidence, d.raw_response);
+  `).run(d.time, model, d.signal, d.symbol, d.action, d.leverage, d.amount, d.reason, d.confidence, d.raw_response);
   return info.lastInsertRowid;
 }
 
@@ -366,7 +371,7 @@ export function getOpenPositionPeakPnlMap(): Map<string, { tradeId: number; peak
   const rows = db.prepare(`
     SELECT t.id, t.symbol, t.peak_pnl_pct FROM trades t
     INNER JOIN (
-      SELECT symbol, MAX(id) AS max_id FROM trades WHERE status='open' GROUP BY symbol
+      SELECT symbol, MAX(id) AS max_id FROM trades WHERE status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) GROUP BY symbol
     ) latest ON t.id = latest.max_id
     WHERE t.status='open' AND t.peak_pnl_pct > 0
   `).all() as any[];

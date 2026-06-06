@@ -106,13 +106,7 @@ export function assessSymbolRisk(
     warnings.push(`低波动(ATR${atrPct.toFixed(1)}%),盈利空间有限`);
   }
 
-  // 5. 已有持仓 → 同币种不建议加仓（但可以继续持有）
-  if (existingPosition) {
-    riskScore -= 10;
-    warnings.push("已有同币种持仓(不影响持有,但不建议加仓)");
-  }
-
-  // 6. 风险分数 → 风险偏好
+  // 5. 风险分数 → 风险偏好
   let riskAppetite: "low" | "medium" | "high" | "avoid";
   if (riskScore >= 70) {
     riskAppetite = "high";
