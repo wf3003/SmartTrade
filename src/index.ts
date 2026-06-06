@@ -879,7 +879,7 @@ async function aiDecisionCycle() {
             ? sa.entryQuality.longEntryScore
             : sa.entryQuality.shortEntryScore;
           const eqMin = aggrScale(getIntercept("entry_quality_min", 35), 15);
-          const eqThreshold = aiScore >= 70 ? Math.min(eqMin, 25) : eqMin;
+          const eqThreshold = aiScore >= 70 ? Math.min(eqMin, 25) : Math.min(eqMin, 35);
           ck(`EQ(${trade.action})`, entryScore >= eqThreshold);
           if (entryScore < eqThreshold) {
             const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<${eqThreshold}，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
