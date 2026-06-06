@@ -304,8 +304,8 @@ async function executeFullOpen(
       db.prepare(`INSERT INTO trades (exchange, symbol, side, leverage, entry_price, entry_qty, entry_time, reason, status, close_type, parent_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 'partial_open', ?)`)
         .run(CONFIG.exchanges[0], symbol, side, safeLev, fillPrice, qty, new Date().toISOString(), reason, existingTrade.id);
-      // 保留原峰值（追仓后交易所合并仓位，原高水位仍有效）
-      // peakPnlMap.delete(symbol);
+      // 追仓后仓位已变，用交易所实时 PnL 重新初始化峰值
+      peakPnlMap.set(symbol, confirmed?.unrealizedPnlPct || 0);
       logger.warn(`✅ 追仓: ${symbol} ${side} +${qty}张 @$${fillPrice} ${safeLev}x (交易所合并:${confirmed.qty}张 @$${confirmed.entryPrice})`);
       return { success: true, fillPrice };
     }
