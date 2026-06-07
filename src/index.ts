@@ -306,8 +306,10 @@ async function executeFullOpen(
 
     if (existingTrade) {
       const safeLev = Math.min(leverage, existingTrade.leverage || leverage);
-      db.prepare("UPDATE trades SET entry_qty=?, entry_price=?, leverage=? WHERE id=?")
-        .run(confirmed.qty, confirmed.entryPrice, safeLev, existingTrade.id);
+      const mainContractSize = exchangeManager.getContractSize(symbol);
+      const mainNotional = confirmed.qty * confirmed.entryPrice * mainContractSize;
+      db.prepare("UPDATE trades SET entry_qty=?, entry_price=?, leverage=?, notional=?, margin=? WHERE id=?")
+        .run(confirmed.qty, confirmed.entryPrice, safeLev, mainNotional, mainNotional / safeLev, existingTrade.id);
       const partialContractSize = exchangeManager.getContractSize(symbol);
       const partialNotional = qty * fillPrice * partialContractSize;
       db.prepare(`INSERT INTO trades (exchange, symbol, side, leverage, entry_price, entry_qty, entry_time, reason, status, close_type, parent_id, notional, margin)
@@ -629,9 +631,11 @@ async function monitorPositions() {
     for (const pos of uniquePositions) {
       const dbTrade = getLatestOpenTrades().get(pos.symbol);
       if (dbTrade && (Math.abs(dbTrade.entry_qty - pos.qty) > 0.01 || Math.abs(dbTrade.entry_price - pos.entryPrice) > 0.001)) {
-        db.prepare("UPDATE trades SET entry_qty=?, entry_price=? WHERE id=?")
-          .run(pos.qty, pos.entryPrice, dbTrade.id);
-        logger.info(`🔧 同步: ${pos.symbol} qty ${dbTrade.entry_qty}→${pos.qty} price ${dbTrade.entry_price?.toFixed(4)}→${pos.entryPrice?.toFixed(4)}`);
+        const cs = exchangeManager.getContractSize(pos.symbol);
+        const nu = pos.qty * pos.entryPrice * cs;
+        db.prepare("UPDATE trades SET entry_qty=?, entry_price=?, notional=?, margin=? WHERE id=?")
+          .run(pos.qty, pos.entryPrice, nu, nu / (dbTrade.leverage || 1), dbTrade.id);
+        logger.info(`🔧 同步: ${pos.symbol} qty ${dbTrade.entry_qty}→${pos.qty} price ${dbTrade.entry_price?.toFixed(4)}→${pos.entryPrice?.toFixed(4)} notional→${nu.toFixed(0)}`);
       }
     }
 
