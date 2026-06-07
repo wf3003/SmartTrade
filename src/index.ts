@@ -339,11 +339,6 @@ async function executeFullOpen(
       const mainNotional = confirmed.qty * confirmed.entryPrice * mainContractSize;
       db.prepare("UPDATE trades SET entry_qty=?, entry_price=?, leverage=?, notional=?, margin=? WHERE id=?")
         .run(confirmed.qty, confirmed.entryPrice, safeLev, mainNotional, mainNotional / safeLev, existingTrade.id);
-      const partialContractSize = exchangeManager.getContractSize(symbol);
-      const partialNotional = qty * fillPrice * partialContractSize;
-      db.prepare(`INSERT INTO trades (exchange, symbol, side, leverage, entry_price, entry_qty, entry_time, reason, status, close_type, parent_id, notional, margin)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 'partial_open', ?, ?, ?)`)
-        .run(CONFIG.exchanges[0], symbol, side, safeLev, fillPrice, qty, new Date().toISOString(), reason, existingTrade.id, partialNotional, partialNotional / safeLev);
       // 追仓后仓位已变，用交易所实时 PnL 重新初始化峰值
       peakPnlMap.set(symbol, confirmed?.unrealizedPnlPct || 0);
       logger.warn(`✅ 追仓: ${symbol} ${side} +${qty}张 @$${fillPrice} ${safeLev}x (交易所合并:${confirmed.qty}张 @$${confirmed.entryPrice})`);
