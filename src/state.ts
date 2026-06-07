@@ -83,6 +83,10 @@ export function applyOptRules(
   volume24h: number, marketQuality: number, entryQuality: number,
   currentRegime: string = "unknown"
 ): { score: number; logs: string[] } {
+  // BYPASS 模式：不应用任何 opt_rules，AI 原始评分直接决定
+  if (CONFIG.bypassQualityFilters) {
+    return { score: baseScore, logs: ["[BYPASS] 跳过 opt_rules"] };
+  }
   let score = baseScore;
   const logs: string[] = [];
   // 硬编码安全网：始终生效，且区分方向
