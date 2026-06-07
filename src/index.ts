@@ -133,6 +133,7 @@ async function executeFullClose(
   pnl: number,
   pnlPct: number,
   closeType: string,
+  skipCooldown: boolean = false,
 ): Promise<{ closeResult: any; actualPnl: number; actualPnlPct: number }> {
   // 平仓前重新拉一次持仓，拿到最新快照盈亏
   let snapPnl = pnl, snapPnlPct = pnlPct;
@@ -208,7 +209,14 @@ async function executeFullClose(
       consecutiveLossBlock.delete(symbol);
     }
   }
-  applyCloseCooldown(symbol, actualPnlPct);
+  // 方向翻转时跳过冷却（如空→多），因为止损是方向错误而非连续亏损
+  if (!skipCooldown) {
+    applyCloseCooldown(symbol, actualPnlPct);
+  } else {
+    // 翻转方向：重置止损计数，新方向重新开始
+    consecutiveStopCount.set(symbol, 0);
+    logger.warn(`  🔄 ${symbol} 方向翻转，跳过冷却并重置止损计数`);
+  }
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
   setTimeout(() => _recentlyClosed.delete(symbol), 30000);
@@ -778,7 +786,12 @@ async function aiDecisionCycle() {
       logger.info(`📋 AI 持仓决策: ${symbol} → close (${cmd.reason})`);
 
       try {
-        const { actualPnl, actualPnlPct } = await executeFullClose(symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
+        // 方向翻转：同周期内 AI 已发出反向开仓信号，跳过冷却
+        const hasFlipSignal = report.newTrades.some((t: any) =>
+          t.symbol === symbol &&
+          ((pos.side === "short" && t.action === "buy") || (pos.side === "long" && t.action === "sell"))
+        );
+        const { actualPnl, actualPnlPct } = await executeFullClose(symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close", hasFlipSignal);
         const result = `已平仓,PnL:$${actualPnl.toFixed(2)},${actualPnlPct.toFixed(2)}%.${cmd.reason}`;
         updateDecisionStatus(decId, "success", result);
         logger.warn(`  ✅ AI 平仓: ${symbol} $${actualPnl.toFixed(2)} (${actualPnlPct.toFixed(2)}%)`);
