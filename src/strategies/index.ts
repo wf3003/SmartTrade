@@ -89,7 +89,9 @@ export function runStrategyEngine(
     const rsi = ind ? Math.round(ind.rsi14) : 50;
 
     // 缓存到全局状态(供监控循环用)
-    setAtrCache(sym, atrPct);
+    // ATR% 合理性检查 + strategy.ts 一致的小数格式
+    const safeAtrPct = (atrPct > 50 || atrPct < 0.01) ? 1.5 : atrPct;
+    setAtrCache(sym, safeAtrPct / 100);
     setRsiCache(sym, rsi);
 
     // === 策略3: 风控 ===

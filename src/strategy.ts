@@ -56,7 +56,9 @@ export async function generateStrategyReport(
     if (!i1 || !id) { a.push({ symbol: sym, regime: "数据不足", score: 0, trend: "neutral", strength: "weak", keyLevels: "", summary: "数据不足", analysis_1m: m1, analysis_5m: m5, analysis_15m: m15, analysis_1h: "", analysis_1d: "" }); continue; }
     // 缓存 1h ATR% 供监控循环的止损用
     const at = i1.atr14 / p * 100;
-    setAtrCache(sym, at / 100); // 存为小数（如 0.015 = 1.5%）
+    // ATR% 合理性检查：超过 50% 或小于 0.01% 说明 K 线/指标数据异常，回退 1.5%
+    const safeAt = (at > 50 || at < 0.01) ? 1.5 : at;
+    setAtrCache(sym, safeAt / 100); // 存为小数（如 0.015 = 1.5%）
     setRsiCache(sym, i1.rsi14);
 
     // ── 实时回测：多周期扫描，选最优 ──
