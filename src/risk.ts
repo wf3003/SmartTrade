@@ -117,7 +117,9 @@ export function checkProfitProtect(
     protectRatio = 0.20; // 峰值≤15%→保留20%（放宽，给小浮盈更多空间）
   }
   const fullPct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 25) / 100;
-  const fullLine = Math.max(peakPnlPct * Math.max(protectRatio, fullPct), 1.5);
+  // 小峰值回撤下限：避免 protectRatio 过于宽松时净值回吐，默认 0.8%（原硬编码 1.5 覆盖了阶梯保护）
+  const minLine = (interceptParamsCache.get("profit_protect_min_line") ?? 0.8);
+  const fullLine = Math.max(peakPnlPct * Math.max(protectRatio, fullPct), minLine);
 
   // 取较紧的线：ATR 跟踪 vs 阶梯回撤，谁先触发用谁
   const useLine = Math.max(trailLine, fullLine);
