@@ -150,6 +150,16 @@ async function executeFullClose(
   let actualPnl = snapPnl, actualPnlPct = snapPnlPct;
   let pnlSource = "snap";
 
+  // 模拟盘快照不准：用 exit_price 和 entry_price 计算兜底
+  if (pnlSource === "snap" && exitPrice > 0 && dbTrade && dbTrade.entry_price > 0) {
+    const calcPnl = side === "long"
+      ? (exitPrice - dbTrade.entry_price) * qty
+      : (dbTrade.entry_price - exitPrice) * qty;
+    actualPnl = parseFloat(calcPnl.toFixed(2));
+    actualPnlPct = dbTrade.margin > 0 ? (actualPnl / dbTrade.margin) * 100 : 0;
+    pnlSource = "calc";
+  }
+
   // 尝试从交易所收盘订单获取实际盈亏（生产环境 info.pnl 有值）
   try {
     if (closeResult.order?.id) {
