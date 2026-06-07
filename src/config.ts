@@ -58,6 +58,8 @@ export const CONFIG = {
   basePositionPct: envNum("BASE_POSITION_PCT", 5),
 
   // 风控
+  maxTotalMarginPct: envNum("MAX_TOTAL_MARGIN_PCT", 50),
+  maxSymbolMarginPct: envNum("MAX_SYMBOL_MARGIN_PCT", 30),
   accountStopLossUsdt: envNum("ACCOUNT_STOP_LOSS_USDT", 100),
   accountTakeProfitUsdt: envNum("ACCOUNT_TAKE_PROFIT_USDT", 20000),
   maxDrawdownPercent: envNum("MAX_DRAWDOWN_PERCENT", 30),

@@ -87,7 +87,7 @@ ${symbolStats}
   "blockSignals": "哪些信号需要降分？为什么？(只降分不禁止)",
   "blockSymbols": ["BCH/USDT", "SUI/USDT"],
   "scoringAdvice": "基于AI决策历史，哪些类型的市场环境AI评分偏高/偏低？应该怎么校准？",
-  "adjustIntercepts": "必需! 基于近期被拦截的交易和盈亏结果，判断是否需要调整拦截参数。可调的拦截参数: entry_quality_min(当前35), ai_score_min(当前40), market_quality_min(当前20), aggressiveness(当前50), momentum_decay_p(当前12), eq_rsi_mild_os_sp(当前8), eq_rsi_mild_ob_sb(当前5)。检查已有交易和拦截记录，如果发现某个参数导致的拦截让错过太多盈利机会，就降低阈值；如果某个参数放行的交易频繁亏损，就提高阈值。格式: [{param:\"param_name\", value:新数值, reason:\"基于XX笔交易分析\"}] 至少输出1条建议，不得输出空数组"
+  "adjustIntercepts": "必需! 基于近期被拦截的交易和盈亏结果，判断是否需要调整拦截参数。可调的拦截参数: entry_quality_min(当前35), ai_score_min(当前45), market_quality_min(当前20), aggressiveness(当前50), momentum_decay_p(当前12), eq_rsi_mild_os_sp(当前8), eq_rsi_mild_ob_sb(当前5)。检查已有交易和拦截记录，如果发现某个参数导致的拦截让错过太多盈利机会，就降低阈值；如果某个参数放行的交易频繁亏损，就提高阈值。格式: [{param:\"param_name\", value:新数值, reason:\"基于XX笔交易分析\"}] 至少输出1条建议，不得输出空数组"
 }`;
 
   try {

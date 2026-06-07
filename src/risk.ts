@@ -105,15 +105,16 @@ export function checkProfitProtect(
   const trailLine = peakPnlPct - trailDist;
 
   // 阶梯式回撤保护：峰值越高，保护越紧（防59%→14%式大幅回吐）
+  // 放宽小峰值保护，避免过早触发（如AAVE +4.9%→0触发离场）
   let protectRatio: number;
   if (peakPnlPct > 50) {
     protectRatio = 0.60; // 峰值>50%→保留60%，最多回撤40%
   } else if (peakPnlPct > 30) {
-    protectRatio = 0.55; // 峰值>30%→保留55%
+    protectRatio = 0.50; // 峰值>30%→保留50%
   } else if (peakPnlPct > 15) {
-    protectRatio = 0.45; // 峰值>15%→保留45%
+    protectRatio = 0.35; // 峰值>15%→保留35%
   } else {
-    protectRatio = 0.35; // 峰值≤15%→保留35%（原有逻辑）
+    protectRatio = 0.20; // 峰值≤15%→保留20%（放宽，给小浮盈更多空间）
   }
   const fullPct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 25) / 100;
   const fullLine = Math.max(peakPnlPct * Math.max(protectRatio, fullPct), 1.5);

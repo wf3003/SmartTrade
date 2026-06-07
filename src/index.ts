@@ -171,6 +171,13 @@ async function executeFullClose(
 
   if (dbTrade) {
     closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, `${closeType}[${pnlSource}]`);
+    // 级联关闭所有追仓子记录（防 LINK #11 parent_id=6 已平仓但子仓仍 open 的问题）
+    const childClosed = db.prepare(
+      "UPDATE trades SET status='closed', close_type=?, exit_time=?, exit_price=? WHERE parent_id=? AND status='open' AND close_type='partial_open'"
+    ).run(`${closeType}[${pnlSource}]`, new Date().toISOString(), exitPrice, dbTrade.id);
+    if ((childClosed as any).changes > 0) {
+      logger.warn(`  🧹 ${symbol} 级联关闭 ${(childClosed as any).changes} 条追仓子记录`);
+    }
     // 更新 indicator_snapshot 结果
     const snapId = snapshotIdMap.get(symbol);
     if (snapId) {
@@ -608,6 +615,8 @@ async function monitorPositions() {
     for (const t of dbOpen) {
       if (!liveSymbols.has(t.symbol)) {
         closeTrade(t.id, 0, t.entry_qty, 0, 0, 0, "sync_closed");
+        // 级联关闭追仓子记录
+        db.prepare("UPDATE trades SET status='closed', close_type='sync_closed' WHERE parent_id=? AND status='open' AND close_type='partial_open'").run(t.id);
         // 同步关闭也设冷却（仓位被外部手段关闭，也该冷却防立刻重开）
         stopCooldown.set(t.symbol, Date.now());
         consecutiveStopCount.set(t.symbol, (consecutiveStopCount.get(t.symbol) || 0) + 1);
@@ -875,7 +884,7 @@ async function aiDecisionCycle() {
         // ===== 硬性信号过滤：AI复盘反复验证的亏损规律，代码级阻断 =====
 
         // ② AI评分<阈值直接跳
-        const aiScoreMin = aggrScale(getIntercept("ai_score_min", 40), 20);
+        const aiScoreMin = aggrScale(getIntercept("ai_score_min", 45), 20);
         ck(`AI(${aiScore})`, aiScore >= aiScoreMin);
         if (aiScore < aiScoreMin) {
           const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<${aiScoreMin}，质量不足跳过`;
@@ -942,16 +951,46 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} 胜率仓位乘数x${posMult.toFixed(1)}: ${origPct}%→${trade.amountPercent}%`);
         }
 
+        // 5.5 总仓位保证金上限：所有持仓总 margin 不超过总资金上限
+        const existingTotalMargin = positions
+          .reduce((sum: number, p: any) => sum + (p.margin || 0), 0);
+        const equity = account.totalEquity || 1;
+        const newMarginForTotal = Number(account.availableBalance) * trade.amountPercent / 100;
+        const totalExposure = (existingTotalMargin / equity) * 100;
+        const newTotalExposure = (newMarginForTotal / equity) * 100;
+        const maxTotalMargin = getIntercept("max_total_margin_pct", CONFIG.maxTotalMarginPct);
+        if (totalExposure + newTotalExposure > maxTotalMargin) {
+          const totalMsg = `总仓位保证金已达${totalExposure.toFixed(1)}%，新仓${newTotalExposure.toFixed(1)}%>${maxTotalMargin}%上限`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: totalMsg });
+          logger.info(`⏸️ ${trade.symbol} ${totalMsg}，跳过`);
+          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: totalMsg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+          continue;
+        }
+
+        // 5.6 单币种保证金上限：防止单一币种过度集中（如BNB占满全仓）
+        const existingSymbolMargin = positions
+          .filter((p: any) => p.symbol === trade.symbol)
+          .reduce((sum: number, p: any) => sum + (p.margin || 0), 0);
+        const symbolExposure = (existingSymbolMargin / equity) * 100;
+        const newSymbolExposure = (newMarginForTotal / equity) * 100;
+        const maxSymbolMargin = getIntercept("max_symbol_margin_pct", CONFIG.maxSymbolMarginPct);
+        if (symbolExposure + newSymbolExposure > maxSymbolMargin) {
+          const symbolMsg = `${trade.symbol} 单币种保证金已达${symbolExposure.toFixed(1)}%，新仓${newSymbolExposure.toFixed(1)}%>${maxSymbolMargin}%上限`;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: symbolMsg });
+          logger.info(`⏸️ ${symbolMsg}，跳过`);
+          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: symbolMsg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+          continue;
+        }
+
         // 6. 同方向保证金硬上限：用过滤后的最终仓位检查，防市场反弹多仓同时亏损
         const tradeSide = trade.action === "buy" ? "long" : "short";
         const existingSideMargin = positions
           .filter((p: any) => p.side === tradeSide)
           .reduce((sum: number, p: any) => sum + (p.margin || 0), 0);
         const newMargin = Number(account.availableBalance) * trade.amountPercent / 100;
-        const equity = account.totalEquity || 1;
         const sideExposure = (existingSideMargin / equity) * 100;
         const newExposure = (newMargin / equity) * 100;
-        const maxSideMargin = getIntercept("max_side_margin_pct", 40);
+        const maxSideMargin = getIntercept("max_side_margin_pct", 50);
         if (sideExposure + newExposure > maxSideMargin) {
           const msg = `同方向保证金已达${sideExposure.toFixed(1)}%，新仓${newExposure.toFixed(1)}%>${maxSideMargin}%上限`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: msg });
