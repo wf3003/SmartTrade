@@ -57,6 +57,9 @@ export const CONFIG = {
   // 仓位：每笔开仓用可用资金的百分比（行情质量好时满仓，差时自动缩到 60%/40%）
   basePositionPct: envNum("BASE_POSITION_PCT", 5),
 
+  // 调试/数据收集：跳过 AI/MQ/EQ 过滤，仅保留冷却和仓位上限
+  bypassQualityFilters: envStr("BYPASS_QUALITY_FILTERS", "false") === "true",
+
   // 风控
   maxTotalMarginPct: envNum("MAX_TOTAL_MARGIN_PCT", 50),
   maxSymbolMarginPct: envNum("MAX_SYMBOL_MARGIN_PCT", 30),

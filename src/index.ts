@@ -898,7 +898,7 @@ async function aiDecisionCycle() {
 
         // AI主席置信度过滤：<0.3跳过，0.3-0.5轻仓，0.5-0.7半仓
         const aiScore = Math.round((trade.confidence || 0.5) * 100);
-        if (trade.confidence < 0.3 || aiScore < 30) {
+        if (!CONFIG.bypassQualityFilters && (trade.confidence < 0.3 || aiScore < 30)) {
           const aiRsn = trade.reason || "置信度不足";
           const msg = `⏭️ ${trade.symbol} AI置信度${aiScore}<30，跳过 (${aiRsn})`;
           tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI置信度${aiScore}: ${aiRsn}` });
@@ -923,7 +923,7 @@ async function aiDecisionCycle() {
         // ② AI评分<阈值直接跳
         const aiScoreMin = aggrScale(getIntercept("ai_score_min", 45), 20);
         ck(`AI(${aiScore})`, aiScore >= aiScoreMin);
-        if (aiScore < aiScoreMin) {
+        if (!CONFIG.bypassQualityFilters && aiScore < aiScoreMin) {
           const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<${aiScoreMin}，质量不足跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分不足` });
           logger.info(msg + ` | cascade: ${cascade.join(" ")}`); execLog.push(msg);
@@ -933,7 +933,7 @@ async function aiDecisionCycle() {
         const mq = sa?.sentiment?.marketQuality ?? 50;
         const mqMin = aggrScale(getIntercept("market_quality_min", 20), 10);
         ck(`MQ(${mq})`, mq >= mqMin);
-        if (mq < mqMin) {
+        if (!CONFIG.bypassQualityFilters && mq < mqMin) {
           const msg = `⏭️ ${trade.symbol} 行情质量${mq}<${mqMin}，跳过`;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `行情质量低(${mq})` });
           logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
@@ -960,7 +960,7 @@ async function aiDecisionCycle() {
           const eqMin = aggrScale(getIntercept("entry_quality_min", 35), 15);
           const eqThreshold = aiScore >= 70 ? Math.min(eqMin, 25) : Math.min(eqMin, 35);
           ck(`EQ(${trade.action})`, entryScore >= eqThreshold);
-          if (entryScore < eqThreshold) {
+          if (!CONFIG.bypassQualityFilters && entryScore < eqThreshold) {
             const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<${eqThreshold}，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
             logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
@@ -970,7 +970,7 @@ async function aiDecisionCycle() {
           } else if (entryScore < eqThreshold + 20) {
             trade.amountPercent = Math.round(trade.amountPercent * 0.5);
             logger.info(`   ${trade.symbol} 入场质量${entryScore}<${eqThreshold+20}，仓位减半至${trade.amountPercent}%`);
-          } else if (sa.entryQuality.suggestion === "unfavorable") {
+          } else if (!CONFIG.bypassQualityFilters && sa.entryQuality.suggestion === "unfavorable") {
             const msg = `⏭️ ${trade.symbol} 入场质量评级 unfavorable，当前周期不开新仓`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "入场质量unfavorable" });
             logger.info(msg);
