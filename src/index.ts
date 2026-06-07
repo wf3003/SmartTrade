@@ -150,11 +150,13 @@ async function executeFullClose(
   let actualPnl = snapPnl, actualPnlPct = snapPnlPct;
   let pnlSource = "snap";
 
-  // 模拟盘快照不准：用 exit_price 和 entry_price 计算兜底
+  // 模拟盘快照不准：用 exit_price 和 entry_price 计算兜底（含合约乘数）
   if (pnlSource === "snap" && exitPrice > 0 && dbTrade && dbTrade.entry_price > 0) {
+    const cs = symbol.includes("USDT") || symbol.includes("USD")
+      ? exchangeManager.getContractSize(symbol) : 1;
     const calcPnl = side === "long"
-      ? (exitPrice - dbTrade.entry_price) * qty
-      : (dbTrade.entry_price - exitPrice) * qty;
+      ? (exitPrice - dbTrade.entry_price) * qty * cs
+      : (dbTrade.entry_price - exitPrice) * qty * cs;
     actualPnl = parseFloat(calcPnl.toFixed(2));
     actualPnlPct = dbTrade.margin > 0 ? (actualPnl / dbTrade.margin) * 100 : 0;
     pnlSource = "calc";
