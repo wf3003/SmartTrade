@@ -182,12 +182,23 @@ async function executeFullClose(
 
   if (dbTrade) {
     closeTrade(dbTrade.id, exitPrice, qty, actualPnl, actualPnlPct, closeResult.fee || 0, `${closeType}[${pnlSource}]`);
-    // 级联关闭所有追仓子记录（防 LINK #11 parent_id=6 已平仓但子仓仍 open 的问题）
-    const childClosed = db.prepare(
-      "UPDATE trades SET status='closed', close_type=?, exit_time=?, exit_price=? WHERE parent_id=? AND status='open' AND close_type='partial_open'"
-    ).run(`${closeType}[${pnlSource}]`, new Date().toISOString(), exitPrice, dbTrade.id);
-    if ((childClosed as any).changes > 0) {
-      logger.warn(`  🧹 ${symbol} 级联关闭 ${(childClosed as any).changes} 条追仓子记录`);
+    // 级联关闭所有追仓子记录，逐条计算 pnl（防 $0 导致前端误判盈利）
+    const children = db.prepare(
+      "SELECT id, entry_qty, entry_price, margin FROM trades WHERE parent_id=? AND status='open' AND close_type='partial_open'"
+    ).all(dbTrade.id) as any[];
+    if (children.length > 0) {
+      const now = new Date().toISOString();
+      for (const child of children) {
+        const childPnl = side === "long"
+          ? (exitPrice - child.entry_price) * child.entry_qty
+          : (child.entry_price - exitPrice) * child.entry_qty;
+        const childPnlPct = child.margin > 0 ? (childPnl / child.margin) * 100 : 0;
+        db.prepare(
+          "UPDATE trades SET status='closed', close_type=?, exit_time=?, exit_price=?, pnl=?, pnl_pct=? WHERE id=?"
+        ).run(`${closeType}[${pnlSource}]`, now, exitPrice,
+          parseFloat(childPnl.toFixed(2)), parseFloat(childPnlPct.toFixed(2)), child.id);
+      }
+      logger.warn(`  🧹 ${symbol} 级联关闭 ${children.length} 条追仓子记录 (含PnL计算)`);
     }
     // 更新 indicator_snapshot 结果
     const snapId = snapshotIdMap.get(symbol);
