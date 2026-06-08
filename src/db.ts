@@ -611,8 +611,8 @@ export function seedInterceptParams(): void {
   const cnt = db.prepare("SELECT COUNT(*) as c FROM intercept_params").get() as any;
   if (cnt?.c > 0) return;
   const defs: [string, number, string][] = [
-    ["ai_score_min", 45, "AI评分最低通过线"],
-    ["entry_quality_min", 35, "入场质量最低分"],
+    ["ai_score_min", 40, "AI评分最低通过线"],
+    ["entry_quality_min", 30, "入场质量最低分"],
     ["market_quality_min", 20, "行情质量最低分"],
     ["cont_accuracy_min", 55, "回测延续率最低"],
     ["rev_accuracy_min", 55, "回测反转率最低"],
@@ -643,7 +643,7 @@ export function seedInterceptParams(): void {
     ["eq_momentum_decay_p", 12, "动量衰减扣分"],
     ["eq_tf_daily_weight", 150, "日线权重(百分数, 如150=1.5x)"],
     ["strategy_adx_override", 58, "ADX>此值强制延续策略"],
-    ["sl_atr_mult", 200, "止损=ATR×此值/100 (即2.0x)"],
+    ["sl_atr_mult", 400, "止损=ATR×此值/100 (即4.0x)"],
     ["tp_atr_mult", 400, "止盈=ATR×此值/100 (即4.0x)"],
     ["flip_pnl_threshold_high_adx", -250, "高ADX时持仓翻转PnL%×100"],
     ["flip_pnl_threshold_low_adx", -150, "低ADX时持仓翻转PnL%×100"],
@@ -663,16 +663,16 @@ export function seedInterceptParams(): void {
     ["max_total_margin_pct", 50, "总仓位保证金上限%"],
     ["max_symbol_margin_pct", 30, "单币种保证金上限%"],
     ["max_side_margin_pct", 50, "同方向保证金上限%"],
-    ["profit_protect_retrace_pct", 15, "浮盈全平回撤线%"],
-    ["profit_protect_min_line", 0.8, "小峰值回撤保底%"],
-    ["trail_pnl_atr_mult", 150, "跟踪止盈ATR倍数(百分数, 如150=1.5x)"],
+    ["profit_protect_retrace_pct", 50, "浮盈全平回撤线%"],
+    ["profit_protect_min_line", 1.5, "小峰值回撤保底%"],
+    ["trail_pnl_atr_mult", 250, "跟踪止盈ATR倍数(百分数, 如250=2.5x)"],
     ["cooldown_first_min", 30, "首次止损冷却分钟"],
     ["cooldown_second_min", 60, "二次止损冷却分钟"],
     ["cooldown_third_min", 240, "三次+止损冷却分钟"],
     ["regime_osc_threshold", 18, "纯震荡ADX上限"],
     ["regime_weak_threshold", 25, "弱趋势ADX上限"],
     ["regime_strong_threshold", 40, "强趋势ADX下限"],
-    ["aggressiveness", 50, "全局激进程度(0-100)"],
+    ["aggressiveness", 55, "全局激进程度(0-100)"],
     ["max_consecutive_losses", 3, "连续亏损上限(超此数暂停币种)"],
   ];
   const now = new Date().toISOString();
@@ -684,8 +684,8 @@ export function getInterceptParams(): Map<string, number> {
   const rows = db.prepare("SELECT param_name,param_value FROM intercept_params").all() as any[];
   const m = new Map<string, number>();
   for (const r of rows) m.set(r.param_name, Number(r.param_value));
-  m.set("ai_score_min", m.get("ai_score_min") ?? 45);
-  m.set("entry_quality_min", m.get("entry_quality_min") ?? 35);
+  m.set("ai_score_min", m.get("ai_score_min") ?? 40);
+  m.set("entry_quality_min", m.get("entry_quality_min") ?? 30);
   m.set("market_quality_min", m.get("market_quality_min") ?? 20);
   m.set("cont_accuracy_min", m.get("cont_accuracy_min") ?? 55);
   m.set("rev_accuracy_min", m.get("rev_accuracy_min") ?? 55);
@@ -693,7 +693,7 @@ export function getInterceptParams(): Map<string, number> {
   m.set("rsi_extreme_long", m.get("rsi_extreme_long") ?? 80);
   // 策略级
   m.set("strategy_adx_override", m.get("strategy_adx_override") ?? 58);
-  m.set("sl_atr_mult", m.get("sl_atr_mult") ?? 200);
+  m.set("sl_atr_mult", m.get("sl_atr_mult") ?? 400);
   m.set("tp_atr_mult", m.get("tp_atr_mult") ?? 400);
   m.set("flip_pnl_threshold_high_adx", m.get("flip_pnl_threshold_high_adx") ?? -250);
   m.set("flip_pnl_threshold_low_adx", m.get("flip_pnl_threshold_low_adx") ?? -150);
@@ -716,16 +716,16 @@ export function getInterceptParams(): Map<string, number> {
   m.set("max_total_margin_pct", m.get("max_total_margin_pct") ?? 50);
   m.set("max_symbol_margin_pct", m.get("max_symbol_margin_pct") ?? 30);
   m.set("max_side_margin_pct", m.get("max_side_margin_pct") ?? 50);
-  m.set("profit_protect_retrace_pct", m.get("profit_protect_retrace_pct") ?? 15);
-  m.set("profit_protect_min_line", m.get("profit_protect_min_line") ?? 0.8);
-  m.set("trail_pnl_atr_mult", m.get("trail_pnl_atr_mult") ?? 150);
+  m.set("profit_protect_retrace_pct", m.get("profit_protect_retrace_pct") ?? 50);
+  m.set("profit_protect_min_line", m.get("profit_protect_min_line") ?? 1.5);
+  m.set("trail_pnl_atr_mult", m.get("trail_pnl_atr_mult") ?? 250);
   m.set("cooldown_first_min", m.get("cooldown_first_min") ?? 30);
   m.set("cooldown_second_min", m.get("cooldown_second_min") ?? 60);
   m.set("cooldown_third_min", m.get("cooldown_third_min") ?? 240);
   m.set("regime_osc_threshold", m.get("regime_osc_threshold") ?? 18);
   m.set("regime_weak_threshold", m.get("regime_weak_threshold") ?? 25);
   m.set("regime_strong_threshold", m.get("regime_strong_threshold") ?? 40);
-  m.set("aggressiveness", m.get("aggressiveness") ?? 50);
+  m.set("aggressiveness", m.get("aggressiveness") ?? 55);
   m.set("max_consecutive_losses", m.get("max_consecutive_losses") ?? 3);
   return m;
 }
