@@ -279,7 +279,7 @@ async function executePartialClose(
   return { closeResult, newPct: 50, partialPnl };
 }
 
-/** 统一开仓：交易所开仓 → DB插入 → 状态跟踪 */
+/** 统一开仓：先处理方向翻转（先平反向仓，再开同向），交易所开仓 → DB插入 → 状态跟踪 */
 async function executeFullOpen(
   symbol: string,
   side: "long" | "short",
@@ -290,6 +290,21 @@ async function executeFullOpen(
   decId: number,
 ): Promise<{ success: boolean; fillPrice: number; error?: string }> {
   try {
+    // 方向翻转处理：先平掉反方向的持仓，再开新仓
+    const oppSide = side === "long" ? "short" : "long";
+    const beforePositions = await exchangeManager.getPositions();
+    const oppPos = beforePositions.find((p: any) => p.symbol === symbol && p.side === oppSide);
+    if (oppPos && oppPos.qty > 0) {
+      logger.warn(`🔄 ${symbol} 方向翻转: 先平${oppPos.qty}张${oppSide}仓`);
+      try {
+        await exchangeManager.closePosition(symbol, oppSide, oppPos.qty);
+        // 平仓后等交易所结算
+        await new Promise(r => setTimeout(r, 1000));
+      } catch (e: any) {
+        logger.warn(`⚠️ ${symbol} 平反向仓失败(可能已被市场平掉): ${e.message?.slice(0,60)}`);
+      }
+    }
+
     const openResult = await exchangeManager.openPosition(symbol, side, qty, leverage);
     const fillPrice = openResult.avgPrice || tickerPrice;
     _recentlyOpened.add(symbol);
