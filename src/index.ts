@@ -58,6 +58,8 @@ const newPositionTime = new Map<string, number>();
 // 同一币种+方向连败计数 + 方向阻断（key = symbol:side, 如 BCH/USDT:long）
 const directionLoss = new Map<string, { count: number; blockUntil: number }>();
 const DIRECTION_BLOCK_CYCLES = 12; // 连败3次后屏蔽12个决策周期（~1小时）
+// 追仓频率限制（防同一币种短时间过量追仓）
+const chaseWindow = new Map<string, number>(); // key=symbol:action, value=追仓次数
 // 参数调整阻尼：防AI复盘反复调参
 const lastParamAdjustCycle = new Map<string, number>(); // param → 上次调整的周期号
 const PARAM_ADJUST_COOLDOWN_CYCLES = 6; // 同一参数至少隔6个周期才能再调
@@ -223,6 +225,9 @@ async function executeFullClose(
   } else {
     directionLoss.delete(dirKey);
   }
+  // 追仓计数衰减（盈利平仓后该方向追仓计数清零）
+  const chaseResetKey = `${symbol}:${side}`;
+  chaseWindow.delete(chaseResetKey);
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
   setTimeout(() => _recentlyClosed.delete(symbol), 30000);
@@ -796,7 +801,18 @@ async function aiDecisionCycle() {
           logger.info(`🚫 ${dirKey} 方向阻断中，剩余${remain}周期 (连败${dirInfo.count}次)`);
           continue;
         }
-        if (existingSymbols.size >= CONFIG.maxPositions) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
+        if (existingSymbols.size >= CONFIG.maxPositions && !existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
+        // 追仓频率限制：同一币种在6个周期内最多追仓3次
+        const chaseKey = `${trade.symbol}:${trade.action}`;
+        if (existingSymbols.has(trade.symbol) && (chaseWindow.get(chaseKey) || 0) >= 3) {
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "追仓3次已达上限" });
+          logger.info(`⏸️ ${chaseKey} 追仓已达3次上限，跳过`);
+          continue;
+        }
+        if (existingSymbols.has(trade.symbol)) {
+          chaseWindow.set(chaseKey, (chaseWindow.get(chaseKey) || 0) + 1);
+        }
+
 
         // [层叠日志] 每个信号记录所有过滤节点的通过状态
         const cascade: string[] = [];
