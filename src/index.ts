@@ -755,7 +755,7 @@ async function aiDecisionCycle() {
       }
     }
 
-    // AI close 已禁用：仅记录AI建议，不执行平仓
+    // AI close：仅在「入场理由已失效」时执行，其余仅记录
     for (const [symbol, cmd] of mergedCommands) {
       const pos = positions.find(p => p.symbol === symbol);
       const decId = insertDecision({
@@ -765,8 +765,23 @@ async function aiDecisionCycle() {
         amount: 100, reason: cmd.reason,
         confidence: cmd.confidence, raw_response: JSON.stringify(cmd),
       });
-      logger.info(`📋 AI 持仓建议: ${symbol} → close [不执行] (${cmd.reason})`);
-      updateDecisionStatus(decId, "skipped", `AI close已禁用.${cmd.reason}`);
+      const reasonInvalid = cmd.reason.includes("入场理由已失效") ||
+                            cmd.reason.includes("入场理由不再成立") ||
+                            cmd.reason.includes("入场理由不成立");
+      if (reasonInvalid && pos) {
+        logger.warn(`📋 AI 执行平仓: ${symbol} → close (入场理由已失效) (${cmd.reason})`);
+        try {
+          const { actualPnl, actualPnlPct } = await executeFullClose(symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
+          updateDecisionStatus(decId, "success", `已平仓,PnL:$${actualPnl.toFixed(2)}.${cmd.reason}`);
+          logger.warn(`  ✅ AI 平仓: ${symbol} $${actualPnl.toFixed(2)} (${actualPnlPct.toFixed(2)}%)`);
+        } catch (e: any) {
+          updateDecisionStatus(decId, "failed", `平仓失败:${e.message?.slice(0,60)}`);
+          logger.error(`  ❌ AI 平仓失败: ${symbol} ${e.message}`);
+        }
+      } else {
+        logger.info(`📋 AI 持仓建议: ${symbol} → close [不执行] (${cmd.reason})`);
+        updateDecisionStatus(decId, "skipped", `AI close非入场理由失效.${cmd.reason}`);
+      }
     }
 
     // 6. 开新仓
