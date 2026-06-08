@@ -398,6 +398,7 @@ async function main() {
 
   // AI 决策循环
   logger.info(`🤖 AI 决策循环已启动 (每 ${DECISION_INTERVAL / 1000 / 60} 分钟)`);
+  await new Promise(r => setTimeout(r, 3000));  // 等交易所连接稳定
   (async function decisionLoop() {
     let nextRunAt = Date.now();
     while (true) {

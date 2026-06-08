@@ -254,7 +254,9 @@ class ExchangeManager {
             liquidationPrice: p.liquidationPrice,
           });
         }
-      } catch {}
+      } catch (e: any) {
+        logger.warn(`⚠️ ${name} getPositions 异常: ${(e?.message || String(e) || '?').slice(0, 120)}`);
+      }
     }
     return positions;
   }
