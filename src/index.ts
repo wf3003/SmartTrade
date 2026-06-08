@@ -730,57 +730,8 @@ async function aiDecisionCycle() {
     setLatestReport(report);
     newCycle();
     
-    logger.info(`📊 AI主席: ${aiReport.analysis.length}分析 | ${aiReport.positions.length}持仓指令 | ${aiReport.newTrades.filter(t=>t.action!=='hold').length}信号`);
-    for (const pos of aiReport.positions) {
-      if (pos.action !== "hold") {
-        logger.warn(`🤖 持仓决策: ${pos.symbol} → ${pos.action} — ${pos.reason}`);
-      }
-    }
-
-    // 5. 持仓管理: AI主席输出仅供参考，平仓全部由监控止盈/止损执行
-    const mergedCommands = new Map<string, {
-      action: "close";
-      reason: string;
-      confidence: number;
-    }>();
-
-    if (report.positions) {
-      for (const pc of report.positions) {
-        if (pc.action === "hold" || pc.action === "buy" || pc.action === "sell") continue;
-        mergedCommands.set(pc.symbol, {
-          action: "close",
-          reason: pc.reason,
-          confidence: pc.confidence || 0.7,
-        });
-      }
-    }
-
-    // AI close：仅在「入场理由已失效」时执行，其余完全跳过不留痕
-    for (const [symbol, cmd] of mergedCommands) {
-      const reasonInvalid = cmd.reason.includes("入场理由已失效") ||
-                            cmd.reason.includes("入场理由不再成立") ||
-                            cmd.reason.includes("入场理由不成立");
-      if (!reasonInvalid) continue;
-
-      const pos = positions.find(p => p.symbol === symbol);
-      if (!pos) continue;
-      const decId = insertDecision({
-        time: new Date().toISOString(),
-        ai_model: CONFIG.ai.model, signal: "pos-close",
-        symbol, action: "close", leverage: pos?.leverage || CONFIG.defaultLeverage,
-        amount: 100, reason: cmd.reason,
-        confidence: cmd.confidence, raw_response: JSON.stringify(cmd),
-      });
-      logger.warn(`📋 AI 执行平仓: ${symbol} → close (入场理由已失效) (${cmd.reason})`);
-      try {
-        const { actualPnl, actualPnlPct } = await executeFullClose(symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
-        updateDecisionStatus(decId, "success", `已平仓,PnL:$${actualPnl.toFixed(2)}.${cmd.reason}`);
-        logger.warn(`  ✅ AI 平仓: ${symbol} $${actualPnl.toFixed(2)} (${actualPnlPct.toFixed(2)}%)`);
-      } catch (e: any) {
-        updateDecisionStatus(decId, "failed", `平仓失败:${e.message?.slice(0,60)}`);
-        logger.error(`  ❌ AI 平仓失败: ${symbol} ${e.message}`);
-      }
-    }
+    logger.info(`📊 AI主席: ${aiReport.analysis.length}分析 | ${aiReport.newTrades.filter(t=>t.action!=='hold').length}信号`);
+    // AI close 完全移除：不开不关，AI只开新仓
 
     // 6. 开新仓
     const execLog: string[] = [];
