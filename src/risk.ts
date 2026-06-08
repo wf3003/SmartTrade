@@ -104,8 +104,14 @@ export function checkProfitProtect(
   let trailDist = atrPct > 0 && leverage > 1
     ? Math.max(atrPct * leverage * trailMult, peakPnlPct * 0.1)
     : peakPnlPct * 0.3;
-  // 盈利>=6%时锁紧：回撤最多3个百分点即平仓，防利润在反弹中扫没
-  if (peakPnlPct >= 6) trailDist = Math.min(trailDist, 3);
+  // 盈利>=6%时按比例给回撤空间，不再一刀切3个点
+  if (peakPnlPct >= 15) {
+    trailDist = Math.max(trailDist, peakPnlPct * 0.40, 4);
+  } else if (peakPnlPct >= 10) {
+    trailDist = Math.max(trailDist, peakPnlPct * 0.35, 3);
+  } else if (peakPnlPct >= 6) {
+    trailDist = Math.max(trailDist, peakPnlPct * 0.25, 2);
+  }
   const trailLine = peakPnlPct - trailDist;
 
   // 阶梯式回撤保护：峰值越高，保护越紧（防59%→14%式大幅回吐）
@@ -148,7 +154,10 @@ export function checkStopLoss(
   atrPct: number = 0.015,
   atrMult: number = 2,  // 默认 2×，趋势中传入 4
 ): StopLossResult | null {
-  const stopThreshold = Math.max(2, Math.min(8, atrPct * 100 * atrMult));
+  // 高ATR币种收紧止损倍率，防单笔大亏（如LINK ATR=3.2% → 2×=6.4%止损太宽）
+  const effectiveAtrMult = atrPct > 0.025 ? Math.min(atrMult, 1.5) : atrMult;
+  const maxSl = (interceptParamsCache.get("max_stop_loss_pct") ?? 600) / 100;
+  const stopThreshold = Math.max(1.5, Math.min(maxSl, atrPct * 100 * effectiveAtrMult));
   if (currentPnlPct <= -stopThreshold) {
     return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × ${atrMult} = ${stopThreshold.toFixed(0)}%)` };
   }

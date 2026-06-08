@@ -875,6 +875,22 @@ async function aiDecisionCycle() {
           logger.info(`   ${trade.symbol} 行情质量${mq}，仓位乘数${mqMdMult}×至${trade.amountPercent}%`);
         }
 
+
+        // 盈亏比硬约束：止损/止盈比至少 1:1.5，防止截断利润让亏损奔跑
+        if (!CONFIG.bypassQualityFilters && (trade.stopLossPct || 0) > 0) {
+          const rrRatio = (trade.takeProfitPct || 10) / (trade.stopLossPct || 5);
+          const rrMin = (interceptParamsCache.get("min_risk_reward_ratio") ?? 150) / 100;
+          ck(`R:R(${(rrRatio).toFixed(1)})`, rrRatio >= rrMin);
+          if (rrRatio < rrMin) {
+            const msg = `⏭️ ${trade.symbol} 盈亏比${rrRatio.toFixed(1)}<${rrMin}，TP${trade.takeProfitPct}%/SL${trade.stopLossPct}%不对称`;
+            tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `盈亏比不足(${rrRatio.toFixed(1)})` });
+            logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
+            execLog.push(msg);
+            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, stopLossPct: trade.stopLossPct, takeProfitPct: trade.takeProfitPct, rrRatio }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
+            continue;
+          }
+        }
+
         // 入场质量硬阻断：方向对应的评分<35不开仓（原<20，收紧以过滤RSI超卖/B追空）
         // AI评分≥70的高信心信号放宽EQ门槛至25，防止BB下轨在强趋势中误拦优质空单
         if (sa?.entryQuality) {
