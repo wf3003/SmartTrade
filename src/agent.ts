@@ -64,16 +64,27 @@ function buildStrategyPrompt(
   recentDecisions: any[],
   stats: any,
 ): string {
-  // 当前持仓
+  // 当前持仓（按DB确认的side去重，防交易所结算延迟导致同一币种多方向幽灵仓）
+  const dbSideMap = new Map<string, string>();
+  for (const t of openTrades) dbSideMap.set(t.symbol, t.side);
+  const seenSyms = new Set<string>();
   const posLines = positions.length > 0
-    ? positions.map(p => {
-        const db = openTrades.find((t: any) => t.symbol === p.symbol);
-        const partial = db ? getPartialClosePct(db.id as number, db.entry_qty as number) : 0;
-        const liqDist = p.liquidationPrice && p.entryPrice
-          ? Math.abs((p.liquidationPrice - p.entryPrice) / p.entryPrice * 100).toFixed(1)
-          : '?';
-        return `${p.symbol} ${p.side} | 入场:$${p.entryPrice?.toFixed(2)} | PnL:${p.unrealizedPnlPct?.toFixed(2)}% | 清算距:${liqDist}% | 杠杆:${p.leverage}x${partial > 0 ? ` | 已分批:${partial}%` : ''}`;
-      }).join("\n")
+    ? positions
+        .filter(p => {
+          const key = p.symbol;
+          if (seenSyms.has(key)) return false;
+          if (dbSideMap.has(key) && p.side !== dbSideMap.get(key)) return false;
+          seenSyms.add(key);
+          return true;
+        })
+        .map(p => {
+          const db = openTrades.find((t: any) => t.symbol === p.symbol);
+          const partial = db ? getPartialClosePct(db.id as number, db.entry_qty as number) : 0;
+          const liqDist = p.liquidationPrice && p.entryPrice
+            ? Math.abs((p.liquidationPrice - p.entryPrice) / p.entryPrice * 100).toFixed(1)
+            : '?';
+          return `${p.symbol} ${p.side} | 入场:$${p.entryPrice?.toFixed(2)} | PnL:${p.unrealizedPnlPct?.toFixed(2)}% | 清算距:${liqDist}% | 杠杆:${p.leverage}x${partial > 0 ? ` | 已分批:${partial}%` : ''}`;
+        }).join("\n")
     : "无持仓";
 
   // 历史战绩
