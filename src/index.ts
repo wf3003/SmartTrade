@@ -594,7 +594,7 @@ async function monitorPositions() {
 
       // 止损检查：趋势中 4× ATR（容忍正常回调），震荡中 2× ATR
       const atrVal = atrCache.get(pos.symbol) || 0.015;
-      const isTrend = currentRegimeName.includes("趋势");
+      const isTrend = currentRegimeName.includes("趋势") || currentRegimeName === "unknown";
       const atrMult = isTrend ? 4 : 2;
       const stopLossCheck = isNewPosition
         ? (pnlPct <= -15 ? { shouldClose: true, level: "stop_loss", description: `新仓亏损${pnlPct.toFixed(1)}% 触发宽止损` } : null)
