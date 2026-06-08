@@ -331,8 +331,8 @@ async function executeFullOpen(
       const safeLev = Math.min(leverage, existingTrade.leverage || leverage);
       const mainContractSize = exchangeManager.getContractSize(symbol);
       const mainNotional = confirmed.qty * confirmed.entryPrice * mainContractSize;
-      db.prepare("UPDATE trades SET entry_qty=?, entry_price=?, leverage=?, notional=?, margin=? WHERE id=?")
-        .run(confirmed.qty, confirmed.entryPrice, safeLev, mainNotional, mainNotional / safeLev, existingTrade.id);
+      db.prepare("UPDATE trades SET entry_qty=?, entry_price=?, leverage=?, notional=?, margin=?, side=? WHERE id=?")
+        .run(confirmed.qty, confirmed.entryPrice, safeLev, mainNotional, mainNotional / safeLev, side, existingTrade.id);
       // 追仓后仓位已变，用交易所实时 PnL 重新初始化峰值
       peakPnlMap.set(symbol, confirmed?.unrealizedPnlPct || 0);
       logger.warn(`✅ 追仓: ${symbol} ${side} +${qty}张 @$${fillPrice} ${safeLev}x (交易所合并:${confirmed.qty}张 @$${confirmed.entryPrice})`);
@@ -730,7 +730,6 @@ async function aiDecisionCycle() {
     setLatestReport(report);
     newCycle();
     
-    logger.info(`📊 AI主席: ${aiReport.analysis.length}分析 | ${aiReport.newTrades.filter(t=>t.action!=='hold').length}信号`);
     // AI close 完全移除：不开不关，AI只开新仓
 
     // 6. 开新仓
