@@ -42,19 +42,19 @@ import {
   loadRegimeSnapshot,
 } from "./db";
 import { runOptimizer, evaluateUnjudgedDecisions, discoverComboPatterns, detectRuleDrift, detectRegimeShift } from "./auto-optimizer";
+import { startAllMonitors, stopAllMonitors } from "./monitors/index";
+import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened } from "./monitors/shared";
 
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓（模拟盘限频宽松，高频捕捉峰值）
 const DECISION_INTERVAL = 5 * 60_000; // 每 5 分钟策略决策
 const MINIMUM_ACCOUNT_STOP_USDT = CONFIG.accountStopLossUsdt;
 
 // 记录每个持仓的峰值盈利（用于移动止盈）
-const peakPnlMap = new Map<string, number>();
 // 记录每笔开仓的 indicator_snapshot ID（平仓时更新结果）
 const snapshotIdMap = new Map<string, number>();
 // 记录本周期内每个持仓的已分批平仓比例（防重入）
 const partialCloseMap = new Map<string, number>();
 // 记录新开仓时间（防开仓瞬间止损）
-const newPositionTime = new Map<string, number>();
 // 同一币种+方向连败计数 + 方向阻断（key = symbol:side, 如 BCH/USDT:long）
 const directionLoss = new Map<string, { count: number; blockUntil: number }>();
 const DIRECTION_BLOCK_CYCLES = 12; // 连败3次后屏蔽12个决策周期（~1小时）
@@ -115,10 +115,7 @@ const MAX_NEW_PER_CYCLE = 10;
 // 本地已开仓集合（防 exchange.getPositions 延迟导致持仓上限失效）
 const openedThisSession = new Set<string>();
 // 超涨/超跌日志冷却（防每 2s 重复刷屏）
-let _lastExtremeWarnTs: Map<string, number> | undefined;
 // 监控同步防误重建：记录最近 30s 内被关掉的仓位
-const _recentlyClosed = new Set<string>();
-const _recentlyOpened = new Set<string>();
 
 // ========== 统一开仓 / 关仓函数 ==========
 
@@ -229,8 +226,8 @@ async function executeFullClose(
   const chaseResetKey = `${symbol}:${side}`;
   chaseWindow.delete(chaseResetKey);
   // 标记为最近关闭，防止监控同步误重建
-  _recentlyClosed.add(symbol);
-  setTimeout(() => _recentlyClosed.delete(symbol), 30000);
+  recentlyClosed.add(symbol);
+  setTimeout(() => recentlyClosed.delete(symbol), 30000);
   return { closeResult, actualPnl, actualPnlPct };
 }
 
@@ -317,8 +314,8 @@ async function executeFullOpen(
 
     const openResult = await exchangeManager.openPosition(symbol, side, qty, leverage);
     const fillPrice = openResult.avgPrice || tickerPrice;
-    _recentlyOpened.add(symbol);
-    setTimeout(() => _recentlyOpened.delete(symbol), 15000);
+    recentlyOpened.add(symbol);
+    setTimeout(() => recentlyOpened.delete(symbol), 15000);
 
     // 验证持仓：等1.5秒让交易所结算后确认确实有持仓
     await new Promise(r => setTimeout(r, 1500));
@@ -412,11 +409,12 @@ async function main() {
     logger.info(`📋 恢复峰值: ${symbol} peakPnl=${data.peakPnl.toFixed(1)}%`);
   }
 
-  // 监控循环（从交易所实时检查持仓）—— 串行防并发
-  logger.info(`📡 持仓监控已启动 (每 ${MONITOR_INTERVAL / 1000}s)`);
-  (async function monitorLoop() {
+  // 启动独立监控器（止损、止盈、DB同步各自独立运行）
+  startAllMonitors();
+  // DB 同步循环（补建/关闭/修复记录）
+  (async function syncLoop() {
     while (true) {
-      try { await monitorPositions(); } catch {}
+      try { await syncPositionsWithDb(); } catch {}
       await new Promise(r => setTimeout(r, MONITOR_INTERVAL));
     }
   })();
@@ -440,8 +438,8 @@ async function main() {
   })();
 }
 
-// ========== 监控循环 ==========
-async function monitorPositions() {
+// ========== DB 同步循环 ==========
+async function syncPositionsWithDb() {
   try {
     // 从交易所获取实时持仓
     const positions = await exchangeManager.getPositions();
@@ -481,138 +479,8 @@ async function monitorPositions() {
     });
 
     // 本轮已平标记（止损/止盈关闭后，sync 不重复补建）
-    const closedThisCycle = new Set<string>();
 
-    // 逐笔检查持仓状态
-    for (const pos of uniquePositions) {
-      // 跳过已在本轮止损或最近被关掉的持仓（防交易所结算延迟导致反复止损）
-      if (closedThisCycle.has(pos.symbol)) continue;
-      if (_recentlyClosed.has(pos.symbol)) continue;
-      const pnlPct = pos.unrealizedPnlPct || 0;
-
-      // 刚开仓用宽止损（30 秒内 -10%，之后恢复 -4%）
-      const posAge = newPositionTime.has(pos.symbol)
-        ? Date.now() - (newPositionTime.get(pos.symbol) || 0)
-        : 99999;
-      const isNewPosition = posAge < 30000;
-      const currentPrice = pos.entryPrice > 0 
-        ? pos.entryPrice * (1 + pnlPct / 100 / pos.leverage) 
-        : 0;
-
-      const dbTrade = getLatestOpenTrades().get(pos.symbol);
-
-      // 记录峰值（首次遇到持仓时初始化，持久化到 DB）
-      const key = pos.symbol;
-      if (!peakPnlMap.has(key)) peakPnlMap.set(key, pnlPct);
-      const prevPeak = peakPnlMap.get(key)!;
-      if (pnlPct > prevPeak) {
-        peakPnlMap.set(key, pnlPct);
-        // 持久化到 DB，进程重启后可以恢复
-        if (dbTrade?.id) updatePeakPnlInDb(dbTrade.id, pnlPct);
-      }
-      const peakPnl = peakPnlMap.get(key)!;
-
-      // 超涨/超跌预警（仅日志，30s 防刷屏。平仓决策由策略引擎 2.5ATR 阈值执行）
-      const extAtr = atrCache.get(pos.symbol) || 0.015;
-      const extRsi = rsiCache.get(pos.symbol) || 50;
-      const extDelta = pnlPct / Math.max(pos.leverage || 1, 1);
-      const extreme = checkExtremeDeviation(extDelta, extAtr * 100, extRsi, pos.side, 3);
-      if (extreme.hit) {
-        if (!_lastExtremeWarnTs) _lastExtremeWarnTs = new Map();
-        const lastTs = _lastExtremeWarnTs.get(pos.symbol) || 0;
-        if (Date.now() - lastTs > 30000) {
-          _lastExtremeWarnTs.set(pos.symbol, Date.now());
-          logger.warn(`⚠️ ${extreme.label}预警: ${pos.symbol} ${extreme.detail}, 谨防${extreme.label === "超跌反弹" ? "反弹" : "回调"}`);
-        }
-      }
-
-      // 【优化】浮盈保护：峰值>3%后回撤过半 → 平仓
-      // 在跟踪止盈之前检查（避免浮盈大幅回吐）
-      // 跳过最近开仓/追仓的币种（防监控和开仓抢占）
-      if (_recentlyOpened.has(pos.symbol)) continue;
-      if (peakPnl > 0 && pos.qty > 0) {
-        const posAtr = (atrCache.get(pos.symbol) || 0.015) * 100;
-        const posLev = pos.leverage || 1;
-        const profitProtect = checkProfitProtect(peakPnl, pnlPct, posAtr, posLev);
-        if (profitProtect?.shouldClose) {
-          logger.warn(`🔒 ${profitProtect.reason} | ${pos.symbol}`);
-          try {
-            await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pnlPct, "profit_protect");
-            closedThisCycle.add(pos.symbol);
-          } catch (e: any) {
-            logger.error(`浮盈保护平仓失败 ${pos.symbol}: ${e.message}`);
-          }
-          continue;
-        }
-
-      }
-
-      // 跟踪止盈已由浮盈保护替代，不再需要
-
-      // 盈利回吐全平：曾经到过高位（不含杠杆5%+），回撤到亏损，直接全平保本
-      const trailLev = Math.max(pos.leverage || 1, 1);
-      const peakPrice = peakPnl / trailLev;
-      if (peakPrice >= 5 && pnlPct < 0 && pos.qty > 0) {
-        logger.warn(`⚠️ 盈利回吐: ${pos.symbol} 峰值${peakPrice.toFixed(1)}%→当前${pnlPct.toFixed(1)}%, 全平${pos.qty}张保本`);
-        try {
-          await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pnlPct, "profit_revert");
-          closedThisCycle.add(pos.symbol);
-        } catch (e: any) {
-          logger.error(`盈利回吐全平失败 ${pos.symbol}: ${e.message}`);
-        }
-        continue;
-      }
-
-      // 时间止损：持仓 > 4 小时且从未盈利且当前亏损 ≥ -2% → 平仓释放保证金
-      const posAgeHours = newPositionTime.has(pos.symbol)
-        ? (Date.now() - (newPositionTime.get(pos.symbol) || 0)) / 3600000
-        : 0;
-      if (posAgeHours > 4 && pnlPct <= -2 && peakPnl <= 0) {
-        logger.warn(`⏰ 时间止损: ${pos.symbol} 持仓${posAgeHours.toFixed(1)}h从未盈利, 亏损${pnlPct.toFixed(1)}%, 平仓释放保证金`);
-        try {
-          await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "time_stop");
-          logger.warn(`  ✅ 时间止损平仓成功: ${pos.symbol} ${pos.qty}张`);
-          closedThisCycle.add(pos.symbol);
-        } catch (e: any) {
-          logger.error(`时间止损平仓失败 ${pos.symbol}: ${e.message}`);
-        }
-        continue;
-      }
-
-      // 【优化】120分钟从未盈利且浮亏 → 平仓释放
-      const posAgeMin = newPositionTime.has(pos.symbol)
-        ? (Date.now() - (newPositionTime.get(pos.symbol) || 0)) / 60000
-        : 0;
-      if (posAgeMin > 120 && pnlPct < 0 && peakPnl < 0.5 && pos.qty > 0) {
-        logger.warn(`⏰ 无盈利平仓: ${pos.symbol} ${posAgeMin.toFixed(0)}分从未过半盈, 平仓`);
-        try {
-          await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "no_profit_stop");
-          closedThisCycle.add(pos.symbol);
-        } catch (e: any) {
-          logger.error(`无盈利平仓失败 ${pos.symbol}: ${e.message}`);
-        }
-        continue;
-      }
-
-      // 止损检查：趋势中 4× ATR（容忍正常回调），震荡中 2× ATR
-      const atrVal = atrCache.get(pos.symbol) || 0.015;
-      const isTrend = currentRegimeName.includes("趋势") || currentRegimeName === "unknown";
-      const atrMult = isTrend ? 4 : 2;
-      const stopLossCheck = isNewPosition
-        ? (pnlPct <= -15 ? { shouldClose: true, level: "stop_loss", description: `新仓亏损${pnlPct.toFixed(1)}% 触发宽止损` } : null)
-        : checkStopLoss(pnlPct, peakPnl, pos.leverage || 5, atrVal, atrMult);
-      if (stopLossCheck?.shouldClose) {
-        logger.warn(`🛑 ${stopLossCheck.description} | ${pos.symbol}`);
-        try {
-          await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, stopLossCheck.level);
-          logger.warn(`  ✅ 止损平仓成功: ${pos.symbol} ${pos.qty}张`);
-          closedThisCycle.add(pos.symbol);
-        } catch (e: any) {
-          logger.error(`止损平仓失败 ${pos.symbol}: ${e.message}`);
-        }
-      }
-    }
-
+    // 持仓止盈止损检查已由独立监控器处理
     // 双向同步
     const liveSymbols = new Set(positions.map(p => p.symbol));
     const dbOpen = (db.prepare(
@@ -621,9 +489,8 @@ async function monitorPositions() {
     ) as any).all() as any[];
     // A. 交易所有但 DB 没有 → 补建记录（清库后恢复）
     for (const pos of uniquePositions) {
-      if (closedThisCycle.has(pos.symbol)) continue; // 本轮已止损/止盈平仓，不补建
-      if (_recentlyClosed.has(pos.symbol)) continue; // 最近被AI/策略关掉，等待交易所结算
-      if (_recentlyOpened.has(pos.symbol)) continue; // 最近开仓未入库，等待DB写入
+      if (recentlyClosed.has(pos.symbol)) continue;
+      if (recentlyOpened.has(pos.symbol)) continue; // 最近开仓未入库，等待DB写入
       if (!dbOpen.find((t: any) => t.symbol === pos.symbol)) {
         const existing = (db.prepare("SELECT id FROM trades WHERE symbol=? AND status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1").get(pos.symbol) as any);
         if (!existing) {
