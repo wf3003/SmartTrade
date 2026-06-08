@@ -33,6 +33,8 @@ export async function executeFullClose(
   pnlPct: number,
   closeType: string,
 ): Promise<{ closeResult: any; actualPnl: number; actualPnlPct: number }> {
+  // 抢先标记为"关闭中"，防止监控器和AI循环同时平同一仓位
+  recentlyClosed.add(symbol);
   // 平仓前重新拉一次持仓，拿到最新快照盈亏
   let snapPnl = pnl, snapPnlPct = pnlPct;
   try {
@@ -132,7 +134,7 @@ export async function executeFullClose(
   chaseWindow.delete(chaseResetKey);
 
   // 标记为最近关闭，防止监控同步误重建
-  recentlyClosed.add(symbol);
+  // recentlyClosed 已在函数开头设置，这里只设清理定时器
   setTimeout(() => recentlyClosed.delete(symbol), 30_000);
 
   return { closeResult, actualPnl, actualPnlPct };
