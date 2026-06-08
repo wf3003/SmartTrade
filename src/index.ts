@@ -43,7 +43,7 @@ import {
 } from "./db";
 import { runOptimizer, evaluateUnjudgedDecisions, discoverComboPatterns, detectRuleDrift, detectRegimeShift } from "./auto-optimizer";
 
-const MONITOR_INTERVAL = 5_000;  // 每 5 秒检查持仓（原2秒，降低OKX限频压力）
+const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓（模拟盘限频宽松，高频捕捉峰值）
 const DECISION_INTERVAL = 5 * 60_000; // 每 5 分钟策略决策
 const MINIMUM_ACCOUNT_STOP_USDT = CONFIG.accountStopLossUsdt;
 
