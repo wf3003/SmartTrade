@@ -528,6 +528,8 @@ async function monitorPositions() {
 
       // 【优化】浮盈保护：峰值>3%后回撤过半 → 平仓
       // 在跟踪止盈之前检查（避免浮盈大幅回吐）
+      // 跳过最近开仓/追仓的币种（防监控和开仓抢占）
+      if (_recentlyOpened.has(pos.symbol)) continue;
       if (peakPnl > 0 && pos.qty > 0) {
         const posAtr = (atrCache.get(pos.symbol) || 0.015) * 100;
         const posLev = pos.leverage || 1;
