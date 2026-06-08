@@ -134,9 +134,7 @@ ${symbolStats}
 
 export function buildTradeSummary(trades: any[]): string {
   if (!trades || trades.length === 0) return "";
-  // 取最近30笔，防提示词过长导致AI返回空JSON
-  const recent = trades.slice(-30);
-  return recent.map((t: any) => {
+  return trades.map((t: any) => {
     const pnl = t.pnl || 0;
     const e = pnl >= 0 ? "✅" : "❌";
     const peak = t.peak_pnl_pct ? `峰值${t.peak_pnl_pct.toFixed(1)}%` : "";
@@ -147,9 +145,8 @@ export function buildTradeSummary(trades: any[]): string {
 
 export function buildSymbolStats(trades: any[]): string {
   if (!trades) return "";
-  const recent = trades.slice(-30);
   const map: Record<string, {pnl:number; w:number; l:number; ct:string[]}> = {};
-  for (const t of recent) {
+  for (const t of trades) {
     if (t.status !== "closed") continue;
     const s = t.symbol;
     if (!map[s]) map[s] = {pnl:0, w:0, l:0, ct:[]};
