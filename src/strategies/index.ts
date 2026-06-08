@@ -15,7 +15,7 @@ import { analyzeSentiment, type SentimentAnalysis } from "./sentiment";
 import { assessSymbolRisk, assessPortfolioRisk, type RiskAssessment, type PortfolioRisk } from "./risk-reward";
 import { assessEntryQuality, type EntryQuality } from "./entry-quality";
 import { CONFIG } from "../config";
-import { setAtrCache, setRsiCache } from "../state";
+import { setAtrCache, setRsiCache, setIndicatorCache, interceptParamsCache } from "../state";
 import { logger } from "../logger";
 
 export interface StrategyOutput {
@@ -93,6 +93,33 @@ export function runStrategyEngine(
     const safeAtrPct = (atrPct > 50 || atrPct < 0.01) ? 1.5 : atrPct;
     setAtrCache(sym, safeAtrPct / 100);
     setRsiCache(sym, rsi);
+
+    // 填充 indicatorCache（供止损分行情 + regime 检测使用）
+    const c1d = ohlcv["1d"] ? convertCandles(ohlcv["1d"]) : [];
+    const id = calcIndicators(c1d);
+    const dailyUp = id ? id.ema20 > id.ema50 : technical.directionBias === "bullish";
+    const dailyAdx = id ? id.adx : 25;
+    const price = ticker.price;
+    const ema20 = ind ? ind.ema20 : price;
+    const ema50 = id ? id.ema50 : price;
+    // 简化版 regime 分类（不依赖 strategy.ts 的 classifyRegime）
+    const oscThr = (interceptParamsCache.get("regime_osc_threshold") ?? 18);
+    const weakThr = (interceptParamsCache.get("regime_weak_threshold") ?? 25);
+    const strongThr = (interceptParamsCache.get("regime_strong_threshold") ?? 40);
+    let regime = "纯震荡";
+    if (dailyAdx < oscThr) regime = "纯震荡";
+    else if (dailyAdx < weakThr) regime = dailyUp ? "震荡偏多" : "震荡偏空";
+    else if (dailyAdx < strongThr) regime = dailyUp ? "弱趋势多" : "弱趋势空";
+    else regime = dailyUp ? "强趋势多" : "强趋势空";
+    setIndicatorCache(sym, {
+      regime,
+      rsi_1h: ind ? ind.rsi14 : 50,
+      rsi_1d: id ? id.rsi14 : 50,
+      adx_1h: ind ? ind.adx : 25,
+      adx_1d: dailyAdx,
+      atr_pct: safeAtrPct,
+      ema_dist_pct: ind ? ((price - ema20) / ema20 * 100) : 0,
+    });
 
     // === 策略3: 风控 ===
     const existingPos = positions.find(p => p.symbol === sym);
