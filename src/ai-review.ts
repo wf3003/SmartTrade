@@ -134,8 +134,8 @@ ${symbolStats}
 
 export function buildTradeSummary(trades: any[]): string {
   if (!trades || trades.length === 0) return "";
-  // 取最近15笔，防提示词过长导致AI返回空JSON
-  const recent = trades.slice(-15);
+  // 取最近30笔，防提示词过长导致AI返回空JSON
+  const recent = trades.slice(-30);
   return recent.map((t: any) => {
     const pnl = t.pnl || 0;
     const e = pnl >= 0 ? "✅" : "❌";
@@ -147,7 +147,7 @@ export function buildTradeSummary(trades: any[]): string {
 
 export function buildSymbolStats(trades: any[]): string {
   if (!trades) return "";
-  const recent = trades.slice(-15);
+  const recent = trades.slice(-30);
   const map: Record<string, {pnl:number; w:number; l:number; ct:string[]}> = {};
   for (const t of recent) {
     if (t.status !== "closed") continue;
