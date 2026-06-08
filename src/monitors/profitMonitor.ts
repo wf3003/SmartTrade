@@ -10,8 +10,8 @@ import { logger } from "../logger";
 import { exchangeManager } from "../exchanges";
 import { atrCache } from "../state";
 import { checkProfitProtect } from "../risk";
-import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened, updatePeak, getPeak } from "./shared";
-import { getLatestOpenTrades, closeTrade } from "../db";
+import { recentlyClosed, recentlyOpened, updatePeak, getPeak } from "./shared";
+import { executeFullClose } from "../close-executor";
 
 const INTERVAL_MS = 2_000;
 
@@ -22,8 +22,6 @@ async function tick() {
     const positions = await exchangeManager.getPositions();
     if (!positions.length) return;
 
-    const openTrades = getLatestOpenTrades();
-
     for (const pos of positions) {
       const symbol = pos.symbol;
       if (recentlyClosed.has(symbol)) continue;
@@ -31,12 +29,14 @@ async function tick() {
       if (!pos.qty || pos.qty <= 0) continue;
 
       const pnlPct = pos.unrealizedPnlPct || 0;
-      const dbTrade = openTrades.get(symbol);
 
       // --- 1. 追踪并持久化峰值 ---
+      const { getLatestOpenTrades } = await import("../db");
+      const openTrades = getLatestOpenTrades();
+      const dbTrade = openTrades.get(symbol);
       updatePeak(symbol, pnlPct, dbTrade?.id);
       const peakPnl = getPeak(symbol);
-      if (peakPnl <= 0) continue; // 从未盈利，跳过止盈检查
+      if (peakPnl <= 0) continue;
 
       // --- 2. 浮盈保护 ---
       const posAtr = (atrCache.get(symbol) || 0.015) * 100;
@@ -44,10 +44,7 @@ async function tick() {
       const protect = checkProfitProtect(peakPnl, pnlPct, posAtr, posLev);
       if (protect?.shouldClose) {
         logger.warn(`🔒 ${protect.reason} | ${symbol}`);
-        await exchangeManager.closePosition(symbol, pos.side, pos.qty);
-        recentlyClosed.add(symbol);
-        setTimeout(() => recentlyClosed.delete(symbol), 30_000);
-        if (dbTrade) closeTrade(dbTrade.id, 0, pos.qty, 0, pnlPct, 0, "profit_protect");
+        await executeFullClose(symbol, pos.side, pos.qty, 0, pnlPct, "profit_protect");
         continue;
       }
 
@@ -56,10 +53,7 @@ async function tick() {
       const peakPrice = peakPnl / trailLev;
       if (peakPrice >= 5 && pnlPct < 0) {
         logger.warn(`⚠️ 盈利回吐: ${symbol} 峰值${peakPrice.toFixed(1)}%→当前${pnlPct.toFixed(1)}%`);
-        await exchangeManager.closePosition(symbol, pos.side, pos.qty);
-        recentlyClosed.add(symbol);
-        setTimeout(() => recentlyClosed.delete(symbol), 30_000);
-        if (dbTrade) closeTrade(dbTrade.id, 0, pos.qty, 0, pnlPct, 0, "profit_revert");
+        await executeFullClose(symbol, pos.side, pos.qty, 0, pnlPct, "profit_revert");
       }
     }
   } catch (e: any) {
