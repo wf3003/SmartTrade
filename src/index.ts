@@ -659,10 +659,7 @@ async function aiDecisionCycle() {
     const tickers = await exchangeManager.getTickers(CONFIG.symbols);
     if (tickers.size === 0) { logger.warn("无市场数据"); return; }
     logger.info(`===== AI 决策周期 #${aiCycleNumber} =====`);
-    // 更新当前行情名（供复盘调参加行情参照）
-    const latestRegime = getOverallRegime();
-    if (latestRegime !== "unknown") currentRegimeName = latestRegime;
-    logger.info(`📊 当前行情: ${currentRegimeName}`);
+
 
     // 2. 持仓 & 账户
     const positions = await exchangeManager.getPositions();
