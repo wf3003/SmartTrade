@@ -38,6 +38,8 @@ import {
   linkSnapshotToTrade,
   seedDefaultOptRules,
   seedInterceptParams,
+  saveRegimeSnapshot,
+  loadRegimeSnapshot,
 } from "./db";
 import { runOptimizer, evaluateUnjudgedDecisions, discoverComboPatterns, detectRuleDrift, detectRegimeShift } from "./auto-optimizer";
 
@@ -53,13 +55,8 @@ const snapshotIdMap = new Map<string, number>();
 const partialCloseMap = new Map<string, number>();
 // 记录新开仓时间（防开仓瞬间止损）
 const newPositionTime = new Map<string, number>();
-// 止损平仓后冷却时间（防连续触发）
-const stopCooldown = new Map<string, number>();
-// 同一币种连续止损计数（递增惩罚）
-const consecutiveStopCount = new Map<string, number>();
-// 同一币种连续亏损计数（实时阻断，不等复盘）
+// 同一币种连续亏损计数（供AI复盘参考）
 const consecutiveLossCount = new Map<string, number>();
-const consecutiveLossBlock = new Map<string, number>(); // blockUntil timestamp
 // 参数调整阻尼：防AI复盘反复调参
 const lastParamAdjustCycle = new Map<string, number>(); // param → 上次调整的周期号
 const PARAM_ADJUST_COOLDOWN_CYCLES = 6; // 同一参数至少隔6个周期才能再调
@@ -75,28 +72,38 @@ function aggrScale(base: number, spread: number): number {
   const agg = (getIntercept("aggressiveness", 50) ?? 50) / 100; // 0-1
   return Math.round(base - (agg - 0.5) * spread);
 }
-let shortPauseUntil = 0;
-// 连续止损计数按天衰减：超过24h未新止损则计数减1
-function decayStopCount(symbol: string): void {
-  const expiry = stopCooldown.get(symbol);
-  if (!expiry) return;
-  // 冷却已过期且超过24h → 计数减1
-  if (expiry < Date.now() && Date.now() - expiry > 24 * 3600_000) {
-    const cur = consecutiveStopCount.get(symbol) || 0;
-    if (cur > 0) consecutiveStopCount.set(symbol, Math.max(0, cur - 1));
-    if ((consecutiveStopCount.get(symbol) || 0) === 0) {
-      stopCooldown.delete(symbol);
-    }
+/** 跟踪当前整体行情名（每次决策周期更新） */
+let currentRegimeName = "unknown";
+/** 从 indicatorCache 计算整体行情名称（完整7种分类） */
+function getOverallRegime(): string {
+  const entries = Array.from(indicatorCache.values()).filter(x => x.regime);
+  if (entries.length === 0) return "unknown";
+  // 按精确行情名聚合统计
+  const counts: Record<string, number> = {};
+  for (const e of entries) {
+    const r = e.regime;
+    if (!r || r === "数据不足") continue;
+    counts[r] = (counts[r] || 0) + 1;
   }
-}
-
-// 获取递增冷却时间（分钟）：第1次30分，第2次1h，第3次4h
-function getDynamicCooldown(symbol: string): number {
-  decayStopCount(symbol);
-  const cnt = consecutiveStopCount.get(symbol) || 0;
-  if (cnt >= 3) return getIntercept("cooldown_third_min", 240);
-  if (cnt === 2) return getIntercept("cooldown_second_min", 60);
-  return getIntercept("cooldown_first_min", 30);
+  const total = Object.values(counts).reduce((s, c) => s + c, 0);
+  if (total === 0) return "unknown";
+  // 取占比最高的行情名
+  let topRegime = "unknown", topCount = 0;
+  for (const [r, c] of Object.entries(counts)) {
+    if (c > topCount) { topCount = c; topRegime = r; }
+  }
+  // 如果最高行情占比超过 50%，直接用它
+  if (topCount > total * 0.5) return topRegime;
+  // 否则看前两名的组合
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const r1 = sorted[0][0], r2 = sorted[1][0];
+  // 如果前两名同方向（如 强趋势多+弱趋势多），合并成强方向
+  if (r1.includes("趋势多") && r2.includes("趋势多")) return "强趋势多";
+  if (r1.includes("趋势空") && r2.includes("趋势空")) return "强趋势空";
+  if (r1.includes("偏多") && r2.includes("偏多")) return "震荡偏多";
+  if (r1.includes("偏空") && r2.includes("偏空")) return "震荡偏空";
+  // 多空混杂 → 用排名第一的
+  return topRegime;
 }
 // 启动后等待 N 个周期再开新仓（让账户数据和 ATR 缓存稳定）
 const STARTUP_COOLDOWN_CYCLES = 0;
@@ -109,23 +116,10 @@ let _lastExtremeWarnTs: Map<string, number> | undefined;
 // 监控同步防误重建：记录最近 30s 内被关掉的仓位
 const _recentlyClosed = new Set<string>();
 const _recentlyOpened = new Set<string>();
-// 盈利回吐减半：记录最近已减过的币种（防每2s重复减）
-const _halfClosed = new Set<string>();
 
 // ========== 统一开仓 / 关仓函数 ==========
 
-/** 统一冷却管理：全平/减半共用，利润<1%就触发冷却 */
-function applyCloseCooldown(symbol: string, pnlPct: number): void {
-  if (pnlPct < 1) {
-    const cnt = (consecutiveStopCount.get(symbol) || 0) + 1;
-    consecutiveStopCount.set(symbol, cnt);
-    const dynMin = getDynamicCooldown(symbol);
-    stopCooldown.set(symbol, Date.now() + dynMin * 60000);
-    logger.warn(`  ⏸️ ${symbol} 平仓触发冷却 ${dynMin}分钟 (连续${cnt}次)`);
-  }
-}
-
-/** 统一关仓：交易所平仓 → DB记录 → 状态清理 → 亏损冷却 */
+/** 统一关仓：交易所平仓 → DB记录 → 状态清理 → 连败追踪 */
 async function executeFullClose(
   symbol: string,
   side: "long" | "short",
@@ -133,7 +127,6 @@ async function executeFullClose(
   pnl: number,
   pnlPct: number,
   closeType: string,
-  skipCooldown: boolean = false,
 ): Promise<{ closeResult: any; actualPnl: number; actualPnlPct: number }> {
   // 平仓前重新拉一次持仓，拿到最新快照盈亏
   let snapPnl = pnl, snapPnlPct = pnlPct;
@@ -215,30 +208,15 @@ async function executeFullClose(
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
-  logger.warn(`  🧊 ${symbol} actualPnlPct=${actualPnlPct.toFixed(2)}% → ${actualPnlPct < 1 ? '冷却' : '不冷却(盈利≥1%)'}`);
-  // 连败追踪：亏则+1, 盈则重置
+  logger.info(`  📷 ${symbol} actualPnlPct=${actualPnlPct.toFixed(2)}%`);
+  // 连败计数（供AI复盘参考）
   if (actualPnlPct <= 0) {
     const losses = (consecutiveLossCount.get(symbol) || 0) + 1;
     consecutiveLossCount.set(symbol, losses);
-    const maxLosses = getIntercept("max_consecutive_losses", 3);
-    if (losses >= maxLosses) {
-      const lossBlockMins = getIntercept("cooldown_first_min", 30);
-      consecutiveLossBlock.set(symbol, Date.now() + lossBlockMins * 60000);
-      logger.warn(`🔴 ${symbol} 连续${losses}次亏损≥上限${maxLosses}, 暂停${lossBlockMins}分钟`);
-    }
   } else {
     if (consecutiveLossCount.get(symbol) && (consecutiveLossCount.get(symbol) || 0) >= 1) {
       consecutiveLossCount.set(symbol, 0);
-      consecutiveLossBlock.delete(symbol);
     }
-  }
-  // 方向翻转时跳过冷却（如空→多），因为止损是方向错误而非连续亏损
-  if (!skipCooldown) {
-    applyCloseCooldown(symbol, actualPnlPct);
-  } else {
-    // 翻转方向：重置止损计数，新方向重新开始
-    consecutiveStopCount.set(symbol, 0);
-    logger.warn(`  🔄 ${symbol} 方向翻转，跳过冷却并重置止损计数`);
   }
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
@@ -281,7 +259,6 @@ async function executePartialClose(
     fee: closeResult.fee || 0,
   });
   partialCloseMap.delete(symbol);
-  applyCloseCooldown(symbol, partialPnl);
   logger.info(`  📝 流水账: ${symbol} 减仓${qty}张 PnL=$${partialPnl.toFixed(2)} (parent=${dbTrade.id})`);
 
   // 检查累计分批平仓量是否已达 100%，是则把原记录标记 closed
@@ -393,20 +370,7 @@ async function main() {
   await loadInterceptParamsFromDb();
   // 强制覆盖硬性惩罚（追空-8分），不受旧持久化数据影响
   ensureHardPenalties();
-  // 恢复连续止损计数（不复位冷却惩罚）
-  try {
-    const { loadFeedbackState } = await import("./db");
-    const raw = loadFeedbackState();
-    if (raw) {
-      const data = JSON.parse(raw);
-      if (data.consecutiveStopCount) {
-        for (const [k, v] of Object.entries(data.consecutiveStopCount)) {
-          consecutiveStopCount.set(k, v as number);
-        }
-        logger.info(`📋 恢复连续止损计数: ${consecutiveStopCount.size}条`);
-      }
-    }
-  } catch {}
+  // 冷却已移除：不再恢复旧冷却状态
   logger.info("=".repeat(50));
   logger.info("   SmartTrade — AI 多交易所合约交易系统");
   logger.info(`   监控: 每 ${MONITOR_INTERVAL / 1000}s | 策略决策: 每 ${DECISION_INTERVAL / 1000}s`);
@@ -599,12 +563,14 @@ async function monitorPositions() {
         continue;
       }
 
-      // 止损检查：新开仓用宽止损 -15%，正常 ATR 动态止损
-      if (stopCooldown.has(pos.symbol) && (stopCooldown.get(pos.symbol)||0) > Date.now()) continue; // 冷却中
+      // 止损检查：趋势中 4× ATR（容忍正常回调），震荡中 2× ATR
       const atrVal = atrCache.get(pos.symbol) || 0.015;
+      const indCache = indicatorCache.get(pos.symbol);
+      const isTrend = indCache?.regime?.includes("趋势");
+      const atrMult = isTrend ? 4 : 2;
       const stopLossCheck = isNewPosition
         ? (pnlPct <= -15 ? { shouldClose: true, level: "stop_loss", description: `新仓亏损${pnlPct.toFixed(1)}% 触发宽止损` } : null)
-        : checkStopLoss(pnlPct, peakPnl, pos.leverage || 5, atrVal);
+        : checkStopLoss(pnlPct, peakPnl, pos.leverage || 5, atrVal, atrMult);
       if (stopLossCheck?.shouldClose) {
         logger.warn(`🛑 ${stopLossCheck.description} | ${pos.symbol}`);
         try {
@@ -647,9 +613,6 @@ async function monitorPositions() {
         closeTrade(t.id, 0, t.entry_qty, 0, 0, 0, "sync_closed");
         // 级联关闭追仓子记录
         db.prepare("UPDATE trades SET status='closed', close_type='sync_closed' WHERE parent_id=? AND status='open' AND close_type='partial_open'").run(t.id);
-        // 同步关闭也设冷却（仓位被外部手段关闭，也该冷却防立刻重开）
-        stopCooldown.set(t.symbol, Date.now());
-        consecutiveStopCount.set(t.symbol, (consecutiveStopCount.get(t.symbol) || 0) + 1);
         logger.warn(`🔧 同步: ${t.symbol} 交易所已无，关闭DB记录`);
       }
     }
@@ -696,6 +659,10 @@ async function aiDecisionCycle() {
     const tickers = await exchangeManager.getTickers(CONFIG.symbols);
     if (tickers.size === 0) { logger.warn("无市场数据"); return; }
     logger.info(`===== AI 决策周期 #${aiCycleNumber} =====`);
+    // 更新当前行情名（供复盘调参加行情参照）
+    const latestRegime = getOverallRegime();
+    if (latestRegime !== "unknown") currentRegimeName = latestRegime;
+    logger.info(`📊 当前行情: ${currentRegimeName}`);
 
     // 2. 持仓 & 账户
     const positions = await exchangeManager.getPositions();
@@ -724,6 +691,9 @@ async function aiDecisionCycle() {
     // === 策略引擎: 三个独立策略分析 ===
     const strategyReport = runStrategyEngine(tickers, ohlcvData, positions, account);
     logger.info(`📡 策略引擎: ${strategyReport.analyses.length}币种 | ${strategyReport.summary}`);
+    // 策略引擎已填充 indicatorCache，更新当前行情名
+    currentRegimeName = getOverallRegime();
+    logger.info(`📊 当前行情: ${currentRegimeName}`);
     
     // === AI 投资委员会主席: 综合决策 ===
     const aiReport = await getMarketReport(strategyReport, positions, account, recentDecs, openTrades);
@@ -752,7 +722,7 @@ async function aiDecisionCycle() {
       }
     }
 
-    // 5. 持仓管理: AI主席直接输出的平仓指令
+    // 5. 持仓管理: AI主席输出仅供参考，平仓全部由监控止盈/止损执行
     const mergedCommands = new Map<string, {
       action: "close";
       reason: string;
@@ -770,10 +740,9 @@ async function aiDecisionCycle() {
       }
     }
 
-    // 统一执行合并后的指令（30分钟保护统一适用）
+    // AI close 已禁用：仅记录AI建议，不执行平仓
     for (const [symbol, cmd] of mergedCommands) {
       const pos = positions.find(p => p.symbol === symbol);
-      // 记录决策（即使持仓已不存在也要写，防"待执行"漏掉）
       const decId = insertDecision({
         time: new Date().toISOString(),
         ai_model: CONFIG.ai.model, signal: "pos-close",
@@ -781,43 +750,8 @@ async function aiDecisionCycle() {
         amount: 100, reason: cmd.reason,
         confidence: cmd.confidence, raw_response: JSON.stringify(cmd),
       });
-
-      if (!pos) {
-        logger.info(`📋 AI 持仓决策: ${symbol} → 持仓已不在 (${cmd.reason})`);
-        updateDecisionStatus(decId, "skipped", `持仓已不存在,未执行.${cmd.reason}`);
-        continue;
-      }
-
-      // 3分钟保护：持仓太新只预警不平仓（防开仓瞬间被AI关）
-      const posAge = newPositionTime.has(symbol)
-        ? (Date.now() - (newPositionTime.get(symbol) || 0)) / 60000
-        : 999;
-      if (posAge < 3) {
-        const skipReason = `新仓保护:持仓${posAge.toFixed(0)}分<3分,跳过.${cmd.reason}`;
-        logger.warn(`🤖 AI 预警: ${symbol} → close ${posAge.toFixed(0)}分 PnL${(pos.unrealizedPnlPct||0).toFixed(1)}% | ${skipReason}`);
-        updateDecisionStatus(decId, "skipped", skipReason);
-        continue;
-      }
-
-      // 查找 DB 中的持仓记录
-      const dbTrade = (getOpenPositions() as any[]).find((t: any) => t.symbol === symbol);
-      logger.info(`📋 AI 持仓决策: ${symbol} → close (${cmd.reason})`);
-
-      try {
-        // 方向翻转：同周期内 AI 已发出反向开仓信号，跳过冷却
-        const hasFlipSignal = report.newTrades.some((t: any) =>
-          t.symbol === symbol &&
-          ((pos.side === "short" && t.action === "buy") || (pos.side === "long" && t.action === "sell"))
-        );
-        const { actualPnl, actualPnlPct } = await executeFullClose(symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close", hasFlipSignal);
-        const result = `已平仓,PnL:$${actualPnl.toFixed(2)},${actualPnlPct.toFixed(2)}%.${cmd.reason}`;
-        updateDecisionStatus(decId, "success", result);
-        logger.warn(`  ✅ AI 平仓: ${symbol} $${actualPnl.toFixed(2)} (${actualPnlPct.toFixed(2)}%)`);
-      } catch (e: any) {
-        const reason = `平仓失败:${e.message?.slice(0,60)}.${cmd.reason}`;
-        updateDecisionStatus(decId, "failed", reason);
-        logger.error(`  平仓失败: ${symbol} ${e.message}`);
-      }
+      logger.info(`📋 AI 持仓建议: ${symbol} → close [不执行] (${cmd.reason})`);
+      updateDecisionStatus(decId, "skipped", `AI close已禁用.${cmd.reason}`);
     }
 
     // 6. 开新仓
@@ -870,27 +804,8 @@ async function aiDecisionCycle() {
         if (openedThisCycle >= MAX_NEW_PER_CYCLE) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "每周期开仓已达上限" }); logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
         // 方向由AI决定，strategy仅给出参考方向
         // 已有持仓 → 追仓模式，由 executeFullOpen 合并处理，不再跳过
-        // 连败阻断: N次连续亏损后暂停该币种 (不等复盘直接拦)
-        if (consecutiveLossBlock.has(trade.symbol) && (consecutiveLossBlock.get(trade.symbol) || 0) > Date.now()) {
-          const until = new Date(consecutiveLossBlock.get(trade.symbol) || 0).toISOString();
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `连败暂停至${until}` });
-          logger.info(`🔴 ${trade.symbol} 连败${consecutiveLossCount.get(trade.symbol) || 0}次, 暂停交易至${until}`);
-          continue;
-        }
+        // 冷却/连败阻断已移除：AI主席自行评估连败币种是否开仓
         if (existingSymbols.size >= CONFIG.maxPositions) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
-        // 止损冷却检查：递增惩罚
-        const dynMin = getDynamicCooldown(trade.symbol);
-        const dynMs = dynMin * 60000;
-        if (stopCooldown.has(trade.symbol)) {
-          logger.warn(`  🧊 冷却存在 ${trade.symbol}: expiry=${new Date(stopCooldown.get(trade.symbol)||0).toISOString()}, now=${Date.now()}, diff=${(Date.now() - (stopCooldown.get(trade.symbol)||0))/1000}s, dynMs=${dynMs/1000}s`);
-        }
-        if (stopCooldown.has(trade.symbol) && (stopCooldown.get(trade.symbol)||0) > Date.now()) {
-          const mins = Math.ceil(((stopCooldown.get(trade.symbol)||0) - Date.now()) / 60000);
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `止损冷却${mins}分钟` });
-          logger.info(`⏸️ ${trade.symbol} 止损冷却中，${mins}分钟/${dynMin}总 (连续${consecutiveStopCount.get(trade.symbol) || 1}次)`);
-          execLog.push(`cooldown:${trade.symbol}`);
-          continue;
-        }
 
         // [层叠日志] 每个信号记录所有过滤节点的通过状态
         const cascade: string[] = [];
@@ -1185,7 +1100,7 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
         }).join("\n")
       : "无持仓";
     const openSummary = `当前${cachedPositions.length}个持仓:\n${posLines}`;
-    const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:2-8%(ATR×2) 浮盈保护:阶梯回撤`;
+    const configStr = `杠杆:${CONFIG.defaultLeverage}x 止损:2-8%(ATR×2) 浮盈保护:阶梯回撤 | 当前行情:${currentRegimeName}`;
     logger.info(`📊 AI 复盘(周期#${currentCycle})开始调用...`);
     const btLogs = db.prepare("SELECT symbol, optimal_strategy, confidence, best_tf FROM backtest_logs WHERE time > datetime('now', '-1 hour') ORDER BY id DESC LIMIT 50").all() as any[];
     const btSummary = btLogs.length > 0 ? btLogs.map((l: any) => `${l.symbol}: ${l.optimal_strategy}(cf${l.confidence}% ${l.best_tf})`).join("\n") : "";
@@ -1197,6 +1112,27 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
       "SELECT symbol, action, reason, status, raw_response FROM decisions WHERE status='skipped' AND raw_response IS NOT NULL AND raw_response != '' AND time > datetime('now', '-2 hours') ORDER BY id DESC LIMIT 30"
     ).all() as any[];
     let skippedAnalysis = "";
+    // 按拦截参数聚合（用于 adjustIntercepts 的虚拟成交计数 + 精准调参）
+    interface SkippedParamProfile {
+      blocked: number; wouldWin: number; wouldLose: number; neutral: number;
+      winRsis: number[]; winFrs: number[]; winPcts: number[];
+      lossRsis: number[]; lossFrs: number[]; lossPcts: number[];
+      winScores: number[]; lossScores: number[];
+    }
+    const skippedParamProfiles: Record<string, SkippedParamProfile> = {};
+    function classifySkippedReason(reason: string): string {
+      if (reason.includes("AI评分")) return "ai_score_min";
+      if (reason.includes("行情质量")) return "market_quality_min";
+      if (reason.includes("入场质量")) return "entry_quality_min";
+      if (reason.includes("回测") || reason.includes("延续率") || reason.includes("反转率")) return "backtest_filter";
+      return "other";
+    }
+    function newParamProfile(): SkippedParamProfile {
+      return { blocked: 0, wouldWin: 0, wouldLose: 0, neutral: 0,
+        winRsis: [], winFrs: [], winPcts: [],
+        lossRsis: [], lossFrs: [], lossPcts: [],
+        winScores: [], lossScores: [] };
+    }
     if (skippedDecisions.length > 0) {
       const bySymbol: Record<string, { skipped: number; wouldWin: number; wouldLose: number }> = {};
       for (const d of skippedDecisions) {
@@ -1213,14 +1149,77 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
           bySymbol[d.symbol].skipped++;
           if (wouldProfit) bySymbol[d.symbol].wouldWin++;
           if (wouldLoss) bySymbol[d.symbol].wouldLose++;
+          // 按拦截参数聚合（含特征画像）
+          const param = classifySkippedReason(d.reason);
+          if (!skippedParamProfiles[param]) skippedParamProfiles[param] = newParamProfile();
+          const pf = skippedParamProfiles[param];
+          pf.blocked++;
+          const relevantScore = (raw as any).mq ?? (raw as any).entryScore ?? (raw.rsi != null ? Math.round(Number(raw.rsi)) : 0);
+          if (wouldProfit) {
+            pf.wouldWin++;
+            if (raw.rsi != null) pf.winRsis.push(Number(raw.rsi));
+            if (raw.fundingRate != null) pf.winFrs.push(Number(raw.fundingRate));
+            pf.winPcts.push(changePct);
+            pf.winScores.push(relevantScore);
+          } else if (wouldLoss) {
+            pf.wouldLose++;
+            if (raw.rsi != null) pf.lossRsis.push(Number(raw.rsi));
+            if (raw.fundingRate != null) pf.lossFrs.push(Number(raw.fundingRate));
+            pf.lossPcts.push(changePct);
+            pf.lossScores.push(relevantScore);
+          } else {
+            pf.neutral++;
+          }
         } catch {}
       }
-      const lines = Object.entries(bySymbol).map(([sym, s]) =>
+      const symLines = Object.entries(bySymbol).map(([sym, s]) =>
         `  ${sym}: 被拦${s.skipped}次 | 若开仓→盈利${s.wouldWin}/亏损${s.wouldLose}/中性${s.skipped-s.wouldWin-s.wouldLose}`
       );
-      if (lines.length > 0) {
-        skippedAnalysis = "\n【被拦截信号回望评估（决策时价格 vs 当前价格）】\n" + lines.join("\n") +
-          "\n请判断：拦截是否正确？哪些被拦信号若开仓会盈利（说明过滤太严），哪些被拦信号若开仓会亏损（说明过滤正确）？";
+      // 按参数特征画像，含 WHY 分析
+      function fmtRange(vals: number[], pct: boolean): string {
+        if (vals.length === 0) return "无数据";
+        const sorted = [...vals].sort((a, b) => a - b);
+        const avg = vals.reduce((s, x) => s + x, 0) / vals.length;
+        const lo = sorted[0], hi = sorted[sorted.length - 1];
+        const sf = pct ? 2 : 1;
+        return `${lo.toFixed(sf)}~${hi.toFixed(sf)}(均${avg.toFixed(sf)})`;
+      }
+      const paramLines = Object.entries(skippedParamProfiles)
+        .sort((a, b) => b[1].blocked - a[1].blocked)
+        .map(([param, pf]) => {
+          const curVal = param === "other" ? "?" : String(interceptParamsCache.get(param) ?? "?");
+          let line = `  ${param}(阈值=${curVal}): 拦${pf.blocked}次 | 盈${pf.wouldWin}/亏${pf.wouldLose}/中${pf.neutral}`;
+          if (pf.wouldWin > 0) {
+            line += `\n    盈利被拦: RSI${fmtRange(pf.winRsis, false)} | 费率${fmtRange(pf.winFrs.map(f=>f*100), true)}% | 涨幅${fmtRange(pf.winPcts, true)}% | 被拦得分${fmtRange(pf.winScores, false)}`;
+            if (pf.winScores.length > 0) {
+              const winScoreHi = Math.max(...pf.winScores);
+              const winScoreLo = Math.min(...pf.winScores);
+              line += `\n    → 这${pf.wouldWin}笔盈利信号的被拦得分在${winScoreLo.toFixed(0)}~${winScoreHi.toFixed(0)}，若阈值≤${winScoreHi.toFixed(0)}可捕获`;
+            }
+          }
+          if (pf.wouldLose > 0) {
+            line += `\n    亏损被拦: RSI${fmtRange(pf.lossRsis, false)} | 费率${fmtRange(pf.lossFrs.map(f=>f*100), true)}% | 涨幅${fmtRange(pf.lossPcts, true)}% | 被拦得分${fmtRange(pf.lossScores, false)}`;
+            if (pf.lossScores.length > 0) {
+              const lossScoreLo = Math.min(...pf.lossScores);
+              line += `\n    → 这${pf.wouldLose}笔亏损信号的被拦得分≥${lossScoreLo.toFixed(0)}，维持阈值≥${lossScoreLo.toFixed(0)}可继续过滤`;
+            }
+          }
+          // 盈亏得分区间不重叠 → 可精准设置阈值
+          if (pf.wouldWin > 0 && pf.wouldLose > 0 && pf.winScores.length > 0 && pf.lossScores.length > 0) {
+            const winHi = Math.max(...pf.winScores);
+            const lossLo = Math.min(...pf.lossScores);
+            if (winHi < lossLo) {
+              line += `\n    🎯 精准区间：盈利被拦 max=${winHi.toFixed(0)} < 亏损被拦 min=${lossLo.toFixed(0)}，建议阈值设在 ${winHi.toFixed(0)}~${lossLo.toFixed(0)} 之间`;
+            } else {
+              line += `\n    ⚠️ 盈亏得分重叠(盈${winHi.toFixed(0)}~亏${lossLo.toFixed(0)})，无法单靠此阈值完全分离，需结合其他参数过滤`;
+            }
+          }
+          return line;
+        });
+      if (symLines.length > 0) {
+        skippedAnalysis = "\n【被拦截信号回望评估】\n按参数(含盈亏特征画像，供精准调参):\n" + paramLines.join("\n\n") +
+          "\n\n按币种:\n" + symLines.join("\n") +
+          "\n\n建议：根据以上「盈亏被拦得分区间」，若盈利被拦得分明显低于亏损被拦得分(=区间不重叠)，则将阈值设于两区间之间。请据此给出 adjustIntercepts。";
       }
     }
     const fullDecAnalysis = decAnalysis + skippedAnalysis;
@@ -1255,14 +1254,19 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
         // 4. AI建议调整拦截参数（带阻尼：冷却+EMA平滑+最少交易数）
         if (Array.isArray(parsed.adjustIntercepts)) {
           const closedTrades = allTrades.filter((t: any) => t.status === "closed");
-          const canAdjust = closedTrades.length >= PARAM_MIN_CLOSED_TRADES;
+          // 虚拟成交：被拦信号 + 回望评估 → 也参与统计，打破「太保守→无数据→无法调参」的死锁
+          const virtualTrades = Object.entries(skippedParamProfiles).reduce(
+            (sum, [, s]) => sum + s.blocked, 0
+          );
+          const effectiveTrades = closedTrades.length + virtualTrades;
+          const canAdjust = effectiveTrades >= PARAM_MIN_CLOSED_TRADES;
           for (const adj of parsed.adjustIntercepts) {
             if (adj.param && typeof adj.param === "string" && typeof adj.value === "number") {
               const cur = interceptParamsCache.get(adj.param);
               if (cur === undefined) continue;
-              // 阻尼1: 最少闭环交易数
+              // 阻尼1: 最少闭环交易数（含虚拟成交）
               if (!canAdjust) {
-                logger.info(`⚙️ 参数跳过: ${adj.param} 闭环交易不足(${closedTrades.length}<${PARAM_MIN_CLOSED_TRADES})`);
+                logger.info(`⚙️ 参数跳过: ${adj.param} 有效交易不足(成交${closedTrades.length}+虚${virtualTrades}=${effectiveTrades}<${PARAM_MIN_CLOSED_TRADES})`);
                 continue;
               }
               // 阻尼2: 冷却期检查（同一参数至少隔6周期再调）
@@ -1292,7 +1296,7 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
         }
         logger.info(`📊 复盘反馈已应用完成`);
         // 持久化到数据库，防止进程重启丢失
-        saveFeedbackToDb({ consecutiveStopCount: Object.fromEntries(consecutiveStopCount) }).catch(() => {});
+        saveFeedbackToDb().catch(() => {});
         // 评估未处理决策：对比决策时价格与当前价格
         try {
           const evalCount = evaluateUnjudgedDecisions(tickers);
@@ -1321,8 +1325,29 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
             const avgAdx1d = adxVals.reduce((s, x) => s + x.adx_1d, 0) / adxVals.length;
             const shift = detectRegimeShift(avgAdx1h, avgAdx1d);
             if (shift.shifted) {
-              logger.info(`🌋 ${shift.detail} — 行情变迁，清空规则以重新学习`);
-              resetDynamicParams();
+              const oldRegime = currentRegimeName;
+              const newRegime = getOverallRegime();
+              // 离开旧行情：保存当前参数快照
+              if (oldRegime && oldRegime !== "unknown") {
+                saveRegimeSnapshot(oldRegime);
+                logger.info(`📸 行情变迁: 保存「${oldRegime}」参数快照 (${interceptParamsCache.size}个参数)`);
+              }
+              // 进入新行情：加载该行情的参数快照，或从默认值起步
+              const savedParams = loadRegimeSnapshot(newRegime);
+              if (savedParams.size > 0) {
+                // 加载该行情以前存过的参数
+                for (const [k, v] of savedParams) {
+                  interceptParamsCache.set(k, v);
+                }
+                logger.info(`📸 行情变迁: 加载「${newRegime}」参数 (${savedParams.size}个参数)`);
+              } else {
+                // 首次进入该行情，用 DB 默认值
+                await resetDynamicParams();
+                // 保存一份空白快照（初始值）
+                saveRegimeSnapshot(newRegime);
+                logger.info(`📸 行情变迁: 首次进入「${newRegime}」，使用默认参数并创建快照`);
+              }
+              currentRegimeName = newRegime;
             }
           }
         } catch (e: any) { logger.warn(`[RegimeShift] 异常: ${e.message}`); }

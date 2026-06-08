@@ -4,6 +4,7 @@
 import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { openai } from "./ai-client";
+import { interceptParamsCache } from "./state";
 
 export function buildDecisionAnalysis(decisions: any[]): string {
   if (!decisions || decisions.length === 0) return "";
@@ -64,7 +65,17 @@ ${backtestLog}
 
   const decSection = decisionAnalysis ? `${decisionAnalysis}
 
-` : "";
+ ` : "";
+
+  // 从 DB 读取拦截参数的实际当前值（不复用默认值，防 AI 基于错误基线调参）
+  const aiMin = interceptParamsCache.get("ai_score_min") ?? 45;
+  const eqMin = interceptParamsCache.get("entry_quality_min") ?? 35;
+  const mqMin = interceptParamsCache.get("market_quality_min") ?? 20;
+  const agg = interceptParamsCache.get("aggressiveness") ?? 50;
+  const momDecay = interceptParamsCache.get("eq_momentum_decay_p") ?? 12;
+  const mildOsSp = interceptParamsCache.get("eq_rsi_mild_os_sp") ?? 8;
+  const mildObSb = interceptParamsCache.get("eq_rsi_mild_ob_sb") ?? 5;
+  const paramVals = `entry_quality_min(当前${eqMin}), ai_score_min(当前${aiMin}), market_quality_min(当前${mqMin}), aggressiveness(当前${agg}), momentum_decay_p(当前${momDecay}), eq_rsi_mild_os_sp(当前${mildOsSp}), eq_rsi_mild_ob_sb(当前${mildObSb})`;
 
   const prompt = `你是一个加密货币交易策略分析师。以下是系统的近期交易记录和策略配置。
 
@@ -87,7 +98,7 @@ ${symbolStats}
   "blockSignals": "哪些信号需要降分？为什么？(只降分不禁止)",
   "blockSymbols": ["BCH/USDT", "SUI/USDT"],
   "scoringAdvice": "基于AI决策历史，哪些类型的市场环境AI评分偏高/偏低？应该怎么校准？",
-  "adjustIntercepts": "必需! 基于近期被拦截的交易和盈亏结果，判断是否需要调整拦截参数。可调的拦截参数: entry_quality_min(当前35), ai_score_min(当前45), market_quality_min(当前20), aggressiveness(当前50), momentum_decay_p(当前12), eq_rsi_mild_os_sp(当前8), eq_rsi_mild_ob_sb(当前5)。检查已有交易和拦截记录，如果发现某个参数导致的拦截让错过太多盈利机会，就降低阈值；如果某个参数放行的交易频繁亏损，就提高阈值。格式: [{param:\"param_name\", value:新数值, reason:\"基于XX笔交易分析\"}] 至少输出1条建议，不得输出空数组"
+   "adjustIntercepts": "必需! 基于近期被拦截的交易和盈亏结果，判断是否需要调整拦截参数。可调的拦截参数: ${paramVals}。检查已有交易和拦截记录，如果发现某个参数导致的拦截让错过太多盈利机会，就降低阈值；如果某个参数放行的交易频繁亏损，就提高阈值。格式: [{param:\"param_name\", value:新数值, reason:\"基于XX笔交易分析\"}] 至少输出1条建议，不得输出空数组"
 }`;
 
   try {

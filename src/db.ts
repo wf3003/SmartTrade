@@ -596,6 +596,17 @@ db.exec(`
   )
 `);
 
+// ========== regime_params: 按行情保存参数快照 ==========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS regime_params (
+    regime TEXT NOT NULL,
+    param_name TEXT NOT NULL,
+    param_value REAL NOT NULL,
+    last_updated TEXT,
+    PRIMARY KEY (regime, param_name)
+  )
+`);
+
 export function seedInterceptParams(): void {
   const cnt = db.prepare("SELECT COUNT(*) as c FROM intercept_params").get() as any;
   if (cnt?.c > 0) return;
@@ -787,4 +798,30 @@ export function getAllEvaluations(limit: number = 500): any[] {
     LEFT JOIN indicator_snapshots s ON s.id = e.snapshot_id
     ORDER BY e.id DESC LIMIT ?
   `).all(limit) as any[];
+}
+
+// ========== regime_params CRUD ==========
+
+/** 保存当前拦截参数快照到指定行情名下 */
+export function saveRegimeSnapshot(regime: string): void {
+  const rows = db.prepare("SELECT param_name, param_value FROM intercept_params").all() as any[];
+  const now = new Date().toISOString();
+  const upsert = db.prepare(`
+    INSERT INTO regime_params (regime, param_name, param_value, last_updated)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(regime, param_name) DO UPDATE SET param_value=excluded.param_value, last_updated=excluded.last_updated
+  `);
+  for (const r of rows) {
+    upsert.run(regime, r.param_name, r.param_value, now);
+  }
+}
+
+/** 读取指定行情名下保存的拦截参数快照，返回 Map（若该行情无快照则返回空 Map） */
+export function loadRegimeSnapshot(regime: string): Map<string, number> {
+  const rows = db.prepare(
+    "SELECT param_name, param_value FROM regime_params WHERE regime = ?"
+  ).all(regime) as any[];
+  const m = new Map<string, number>();
+  for (const r of rows) m.set(r.param_name, Number(r.param_value));
+  return m;
 }

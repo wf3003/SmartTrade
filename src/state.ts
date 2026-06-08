@@ -244,12 +244,39 @@ export function getPositionRuleMultiplier(
   return mult;
 }
 
-/** 重置所有动态参数 */
-export function resetDynamicParams() {
+/** 重置所有动态参数（行情变迁时调用） */
+export async function resetDynamicParams() {
   symbolScoreMult.clear();
   signalScorePenalty.clear();
   optRulesCache = [];
-  logger.info(`⚙️ 动态参数已重置为默认值`);
+  // 拦截参数也重置回 DB 默认值（防行情切换后还卡在旧行情的保守参数上）
+  try {
+    const { db: d } = await import("./db");
+    const paramDefaults: [string, number][] = [
+      ["ai_score_min", 45],
+      ["entry_quality_min", 35],
+      ["market_quality_min", 20],
+      ["aggressiveness", 50],
+      ["profit_protect_min_line", 0.8],
+      ["profit_protect_retrace_pct", 15],
+      ["cooldown_first_min", 30],
+      ["cooldown_second_min", 60],
+      ["cooldown_third_min", 240],
+      ["eq_rsi_mild_os_sp", 8],
+      ["eq_rsi_mild_ob_sb", 5],
+      ["eq_momentum_decay_p", 12],
+    ];
+    const stmt = d.prepare("UPDATE intercept_params SET param_value=?, last_adjusted=? WHERE param_name=?");
+    const now = new Date().toISOString();
+    for (const [name, value] of paramDefaults) {
+      stmt.run(value, now, name);
+    }
+    await loadInterceptParamsFromDb();
+    logger.info(`⚙️ 动态参数已重置为默认值 (含${paramDefaults.length}个拦截参数)`);
+  } catch (e: any) {
+    logger.warn(`⚙️ 拦截参数重置失败: ${e.message}`);
+    logger.info(`⚙️ 动态参数已重置为默认值`);
+  }
 }
 
 /** 应用 AI 复盘建议 */
