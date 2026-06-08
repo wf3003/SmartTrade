@@ -101,13 +101,25 @@ function buildStrategyPrompt(
     }
   }
 
-  // 最近 AI 决策
+  // 最近 AI 决策（含同方向追仓统计，防AI重复加仓不自知）
   let decLines = "";
   if (recentDecisions && recentDecisions.length > 0) {
+    // 统计同一symbol+action的重复次数
+    const chaseCounts = new Map<string, number>();
+    for (const d of recentDecisions) {
+      const key = `${d.symbol}:${d.action}`;
+      if (d.status === "success") chaseCounts.set(key, (chaseCounts.get(key) || 0) + 1);
+    }
+    const chaseSummary = Array.from(chaseCounts.entries())
+      .filter(([, c]) => c > 2)
+      .map(([k, c]) => `⚠ ${k} 已有${c}次成功开仓，注意过度集中`)
+      .join("\n");
+
     decLines = "最近 AI 决策：\n" + recentDecisions.slice(0, 12).map((d: any) => {
       const st = d.status === "success" ? "✅" : d.status === "failed" ? "❌" : "⏳";
       return `  ${st} ${d.symbol} ${d.action} ${d.leverage}x ${d.amount}% 置信${d.confidence} | ${d.reason?.slice(0, 50)}`;
     }).join("\n");
+    if (chaseSummary) decLines += "\n" + chaseSummary;
   }
 
   return `你是加密货币投资委员会主席。三个独立的 AI 策略已分别完成分析，以下是它们对每个币种的评估报告。
