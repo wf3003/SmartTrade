@@ -3,6 +3,7 @@
  */
 import { logger } from "./logger";
 import { CONFIG } from "./config";
+import { getRegimeDefaults } from "./regime-defaults";
 export let latestReport: any = null;
 export function setLatestReport(report: any) {
   latestReport = report;
@@ -245,35 +246,25 @@ export function getPositionRuleMultiplier(
 }
 
 /** 重置所有动态参数（行情变迁时调用） */
-export async function resetDynamicParams() {
+export async function resetDynamicParams(regime?: string) {
   symbolScoreMult.clear();
   signalScorePenalty.clear();
   optRulesCache = [];
-  // 拦截参数也重置回 DB 默认值（防行情切换后还卡在旧行情的保守参数上）
+  // 按行情类型加载专属默认值（首次进入该行情时使用）
+  const regimeName = regime || "unknown";
+  const regimeDefaults = getRegimeDefaults(regimeName);
   try {
     const { db: d } = await import("./db");
-    const paramDefaults: [string, number][] = [
-      ["ai_score_min", 45],
-      ["entry_quality_min", 35],
-      ["market_quality_min", 20],
-      ["aggressiveness", 50],
-      ["profit_protect_min_line", 1.5],
-      ["profit_protect_retrace_pct", 50],
-      ["trail_pnl_atr_mult", 250],
-      ["cooldown_first_min", 30],
-      ["cooldown_second_min", 60],
-      ["cooldown_third_min", 240],
-      ["eq_rsi_mild_os_sp", 8],
-      ["eq_rsi_mild_ob_sb", 5],
-      ["eq_momentum_decay_p", 12],
-    ];
+    // 先重置所有拦截参数为全局默认值
+    const { seedInterceptParams } = await import("./db");
+    // 然后用行情专属默认值覆盖
     const stmt = d.prepare("UPDATE intercept_params SET param_value=?, last_adjusted=? WHERE param_name=?");
     const now = new Date().toISOString();
-    for (const [name, value] of paramDefaults) {
+    for (const [name, value] of regimeDefaults) {
       stmt.run(value, now, name);
     }
     await loadInterceptParamsFromDb();
-    logger.info(`⚙️ 动态参数已重置为默认值 (含${paramDefaults.length}个拦截参数)`);
+    logger.info(`⚙️ 参数已重置为「${regimeName}」行情默认值 (${regimeDefaults.size}个参数)`);
   } catch (e: any) {
     logger.warn(`⚙️ 拦截参数重置失败: ${e.message}`);
     logger.info(`⚙️ 动态参数已重置为默认值`);

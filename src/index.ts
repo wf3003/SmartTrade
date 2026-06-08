@@ -1367,7 +1367,7 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
                 logger.info(`📸 行情变迁: 加载「${newRegime}」参数 (${savedParams.size}个参数)`);
               } else {
                 // 首次进入该行情，用 DB 默认值
-                await resetDynamicParams();
+                await resetDynamicParams(newRegime);
                 // 保存一份空白快照（初始值）
                 saveRegimeSnapshot(newRegime);
                 logger.info(`📸 行情变迁: 首次进入「${newRegime}」，使用默认参数并创建快照`);
