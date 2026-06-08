@@ -55,8 +55,9 @@ const snapshotIdMap = new Map<string, number>();
 const partialCloseMap = new Map<string, number>();
 // 记录新开仓时间（防开仓瞬间止损）
 const newPositionTime = new Map<string, number>();
-// 同一币种连续亏损计数（供AI复盘参考）
-const consecutiveLossCount = new Map<string, number>();
+// 同一币种+方向连败计数 + 方向阻断（key = symbol:side, 如 BCH/USDT:long）
+const directionLoss = new Map<string, { count: number; blockUntil: number }>();
+const DIRECTION_BLOCK_CYCLES = 12; // 连败3次后屏蔽12个决策周期（~1小时）
 // 参数调整阻尼：防AI复盘反复调参
 const lastParamAdjustCycle = new Map<string, number>(); // param → 上次调整的周期号
 const PARAM_ADJUST_COOLDOWN_CYCLES = 6; // 同一参数至少隔6个周期才能再调
@@ -209,14 +210,18 @@ async function executeFullClose(
   partialCloseMap.delete(symbol);
   openedThisSession.delete(symbol);
   logger.info(`  📷 ${symbol} actualPnlPct=${actualPnlPct.toFixed(2)}%`);
-  // 连败计数（供AI复盘参考）
+  // 方向连败跟踪（symbol:side 粒度，如 BCH/USDT:long）
+  const dirKey = `${symbol}:${side}`;
   if (actualPnlPct <= 0) {
-    const losses = (consecutiveLossCount.get(symbol) || 0) + 1;
-    consecutiveLossCount.set(symbol, losses);
-  } else {
-    if (consecutiveLossCount.get(symbol) && (consecutiveLossCount.get(symbol) || 0) >= 1) {
-      consecutiveLossCount.set(symbol, 0);
+    const cur = directionLoss.get(dirKey) || { count: 0, blockUntil: 0 };
+    cur.count++;
+    if (cur.count >= 3) {
+      cur.blockUntil = aiCycleNumber + DIRECTION_BLOCK_CYCLES;
+      logger.warn(`🚫 ${dirKey} 连败${cur.count}次 → 屏蔽${DIRECTION_BLOCK_CYCLES}周期`);
     }
+    directionLoss.set(dirKey, cur);
+  } else {
+    directionLoss.delete(dirKey);
   }
   // 标记为最近关闭，防止监控同步误重建
   _recentlyClosed.add(symbol);
@@ -782,7 +787,15 @@ async function aiDecisionCycle() {
         if (openedThisCycle >= MAX_NEW_PER_CYCLE) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "每周期开仓已达上限" }); logger.info(`每周期最多开${MAX_NEW_PER_CYCLE}仓，已达上限`); break; }
         // 方向由AI决定，strategy仅给出参考方向
         // 已有持仓 → 追仓模式，由 executeFullOpen 合并处理，不再跳过
-        // 冷却/连败阻断已移除：AI主席自行评估连败币种是否开仓
+        // 方向阻断：同一币种+方向连败3次后自动屏蔽N周期
+        const dirKey = `${trade.symbol}:${trade.action === 'buy' ? 'long' : 'short'}`;
+        const dirInfo = directionLoss.get(dirKey);
+        if (dirInfo && dirInfo.blockUntil > aiCycleNumber) {
+          const remain = dirInfo.blockUntil - aiCycleNumber;
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `方向阻断(${dirKey})剩余${remain}周期` });
+          logger.info(`🚫 ${dirKey} 方向阻断中，剩余${remain}周期 (连败${dirInfo.count}次)`);
+          continue;
+        }
         if (existingSymbols.size >= CONFIG.maxPositions) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
 
         // [层叠日志] 每个信号记录所有过滤节点的通过状态
