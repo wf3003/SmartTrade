@@ -662,9 +662,12 @@ async function aiDecisionCycle() {
 
 
     // 2. 持仓 & 账户
-    const positions = await exchangeManager.getPositions();
+    const rawPositions = await exchangeManager.getPositions();
     const account = await exchangeManager.getAccount();
     const openTrades = getOpenPositions() as any[];
+    // 过滤持仓：只保留 DB 中有记录的（防模拟盘结算延迟导致已关的空头还在）
+    const dbSymSet = new Set(openTrades.map((t: any) => t.symbol));
+    const positions = rawPositions.filter(p => dbSymSet.has(p.symbol));
 
     // 3. 账户风控
     const risk = checkAccountRisk(account, positions.length);
@@ -685,14 +688,14 @@ async function aiDecisionCycle() {
     }
     logger.info(`📡 K线:${ohlcvData.size}/${CONFIG.symbols.length}币种 行情:${tickers.size}/${CONFIG.symbols.length}币种`);
     
-    // === 策略引擎: 三个独立策略分析 ===
-    const strategyReport = runStrategyEngine(tickers, ohlcvData, positions, account);
+    // === 策略引擎: 三个独立策略分析（用完整持仓算风控） ===
+    const strategyReport = runStrategyEngine(tickers, ohlcvData, rawPositions, account);
     logger.info(`📡 策略引擎: ${strategyReport.analyses.length}币种 | ${strategyReport.summary}`);
     // 策略引擎已填充 indicatorCache，更新当前行情名
     currentRegimeName = getOverallRegime();
     logger.info(`📊 当前行情: ${currentRegimeName}`);
     
-    // === AI 投资委员会主席: 综合决策 ===
+    // === AI 投资委员会主席: 综合决策（用过滤后的持仓，防结算幽灵仓误导） ===
     const aiReport = await getMarketReport(strategyReport, positions, account, recentDecs, openTrades);
     if (!aiReport) { logger.warn("AI主席未返回决策"); return; }
     
