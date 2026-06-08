@@ -27,6 +27,10 @@ export function updatePeakEquity(equity: number) {
 
 // ========== 账户级风控 ==========
 export function checkAccountRisk(account: AccountInfo, livePositions: number = 0): RiskCheck {
+  // 启动初期账户数据未就绪，不触发风控
+  if (account.totalEquity <= 0) {
+    return { allowOpen: false, reason: "账户数据未就绪", accountStop: false };
+  }
   if (account.totalEquity <= CONFIG.accountStopLossUsdt) {
     return { allowOpen: false, reason: `账户权益 $${account.totalEquity.toFixed(0)} ≤ 止损线 $${CONFIG.accountStopLossUsdt}`, accountStop: true };
   }
