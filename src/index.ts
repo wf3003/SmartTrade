@@ -460,6 +460,9 @@ async function monitorPositions() {
 
     // 逐笔检查持仓状态
     for (const pos of uniquePositions) {
+      // 跳过已在本轮止损或最近被关掉的持仓（防交易所结算延迟导致反复止损）
+      if (closedThisCycle.has(pos.symbol)) continue;
+      if (_recentlyClosed.has(pos.symbol)) continue;
       const pnlPct = pos.unrealizedPnlPct || 0;
 
       // 刚开仓用宽止损（30 秒内 -10%，之后恢复 -4%）
@@ -566,8 +569,7 @@ async function monitorPositions() {
 
       // 止损检查：趋势中 4× ATR（容忍正常回调），震荡中 2× ATR
       const atrVal = atrCache.get(pos.symbol) || 0.015;
-      const indCache = indicatorCache.get(pos.symbol);
-      const isTrend = indCache?.regime?.includes("趋势");
+      const isTrend = currentRegimeName.includes("趋势");
       const atrMult = isTrend ? 4 : 2;
       const stopLossCheck = isNewPosition
         ? (pnlPct <= -15 ? { shouldClose: true, level: "stop_loss", description: `新仓亏损${pnlPct.toFixed(1)}% 触发宽止损` } : null)
