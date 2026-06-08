@@ -44,7 +44,7 @@ import {
 import { runOptimizer, evaluateUnjudgedDecisions, discoverComboPatterns, detectRuleDrift, detectRegimeShift } from "./auto-optimizer";
 import { startAllMonitors, stopAllMonitors } from "./monitors/index";
 import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened } from "./monitors/shared";
-import { executeFullClose, directionLoss, chaseWindow, snapshotIdMap, openedThisSession, setAiCycleNumber, aiCycleNumber, DIRECTION_BLOCK_CYCLES } from "./close-executor";
+import { executeFullClose, directionLoss, snapshotIdMap, openedThisSession, setAiCycleNumber, aiCycleNumber, DIRECTION_BLOCK_CYCLES } from "./close-executor";
 
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓（模拟盘限频宽松，高频捕捉峰值）
 const DECISION_INTERVAL = 5 * 60_000; // 每 5 分钟策略决策
@@ -555,15 +555,22 @@ async function aiDecisionCycle() {
           continue;
         }
         if (existingSymbols.size >= CONFIG.maxPositions && !existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
-        // 追仓频率限制：同一币种在6个周期内最多追仓3次
-        const chaseKey = `${trade.symbol}:${trade.action}`;
-        if (existingSymbols.has(trade.symbol) && (chaseWindow.get(chaseKey) || 0) >= 3) {
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "追仓3次已达上限" });
-          logger.info(`⏸️ ${chaseKey} 追仓已达3次上限，跳过`);
-          continue;
-        }
+        // 追仓频率限制：从DB统计当前持仓开了之后已成功追仓几次（防重启丢失计数）
         if (existingSymbols.has(trade.symbol)) {
-          chaseWindow.set(chaseKey, (chaseWindow.get(chaseKey) || 0) + 1);
+          const dbOpenTrade = db.prepare(
+            "SELECT id, entry_time FROM trades WHERE symbol=? AND status='open' AND (close_type IS NULL OR close_type='') ORDER BY id DESC LIMIT 1"
+          ).get(trade.symbol) as any;
+          if (dbOpenTrade) {
+            const chaseCount = (db.prepare(
+              "SELECT COUNT(*) as cnt FROM decisions WHERE symbol=? AND action=? AND status='success' AND time > ?"
+            ).get(trade.symbol, trade.action, dbOpenTrade.entry_time) as any)?.cnt || 0;
+            const maxChase = (interceptParamsCache.get("max_chase_count") ?? 3);
+            if (chaseCount >= maxChase) {
+              tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `追仓${chaseCount}次已达上限` });
+              logger.info(`⏸️ ${trade.symbol}:${trade.action} 已追仓${chaseCount}次≥${maxChase}，跳过`);
+              continue;
+            }
+          }
         }
 
 
