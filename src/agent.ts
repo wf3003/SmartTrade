@@ -175,6 +175,13 @@ ${scoringAdvice}
 - 仓位不超过风控策略的 suggestedAmountPct
 - 止损/止盈参考风控策略的 suggestedStopLossPct / suggestedTakeProfitPct
 
+### 4. 行情方向约束（必须遵守）
+从以上策略分析判断当前整体市场方向（多数币种的日线趋势方向），然后：
+- 若整体偏多（多数币种日线趋势多/强趋势多）→ **做空评分须≥70**，做多正常
+- 若整体偏空（多数币种日线趋势空/强趋势空）→ **做多评分须≥70**，做空正常
+- 若整体震荡（多数币种震荡/纯震荡）→ 多空均可，评分≥50
+- 逆势开仓时，reason 中必须包含「逆势但XXX」的说明
+
 ## JSON 格式
 {
   "analysis": [
@@ -294,7 +301,7 @@ export async function getMarketReport(
 
   const report = parseReport(raw);
   if (report) {
-    logger.info(`📊 AI主席: ${report.analysis.length}分析 | ${report.positions.length}持仓指令 | ${report.newTrades.filter(t=>t.action!=='hold').length}交易信号`);
+        logger.info(`📊 AI主席: ${report.analysis.length}分析 | ${report.newTrades.filter(t=>t.action!=='hold').length}信号`);
   }
   return report;
 }
