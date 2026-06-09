@@ -124,15 +124,19 @@ export function checkProfitProtect(
   } else if (peakPnlPct > 15) {
     protectRatio = 0.35; // 峰值>15%→保留35%
   } else {
-    protectRatio = 0.20; // 峰值≤15%→保留20%（放宽，给小浮盈更多空间）
+    protectRatio = 0.45; // 峰值≤15%→保留45%（防微盈回吐）
   }
-  const fullPct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 25) / 100;
-  // 小峰值回撤下限：避免 protectRatio 过于宽松时净值回吐，默认 0.8%（原硬编码 1.5 覆盖了阶梯保护）
-  const minLine = (interceptParamsCache.get("profit_protect_min_line") ?? 0.8);
+  const fullPct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 30) / 100;
+  // 小峰值回撤下限：避免 protectRatio 过于宽松时净值回吐
+  const minLine = (interceptParamsCache.get("profit_protect_min_line") ?? 0.5);
   const fullLine = Math.max(peakPnlPct * Math.max(protectRatio, fullPct), minLine);
 
-  // 取较紧的线：ATR 跟踪 vs 阶梯回撤，谁先触发用谁
-  const useLine = Math.max(trailLine, fullLine);
+  // 硬回撤上限：无论峰值多高，最多回撤 N 个百分点（优先保留盈利）
+  const maxRetracePp = (interceptParamsCache.get("profit_protect_max_retrace_pp") ?? 5);
+  const absoluteLine = peakPnlPct - maxRetracePp;
+
+  // 取最紧的线：ATR 跟踪 vs 阶梯回撤 vs 硬回撤，谁先触发用谁
+  const useLine = Math.max(trailLine, fullLine, absoluteLine);
 
   if (currentPnlPct < useLine) {
     return {

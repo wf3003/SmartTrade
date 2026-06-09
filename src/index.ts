@@ -196,7 +196,13 @@ async function executeFullOpen(
       }
     }
 
-    const openResult = await exchangeManager.openPosition(symbol, side, qty, leverage);
+    // 仓位严重惩罚的币种：杠杆硬 cap 到 2x（留小仓试错通道）
+    const penaltyLev = (symbolPositionMult.get(symbol) ?? 1.0) <= 0.5 ? 2 : leverage;
+    if (penaltyLev < leverage) {
+      logger.warn(`⚠️ ${symbol} 仓位乘数≤0.5，杠杆从${leverage}x硬限制到${penaltyLev}x`);
+    }
+    const effectiveLeverage = Math.min(leverage, penaltyLev);
+    const openResult = await exchangeManager.openPosition(symbol, side, qty, effectiveLeverage);
     const fillPrice = openResult.avgPrice || tickerPrice;
     recentlyOpened.add(symbol);
     setTimeout(() => recentlyOpened.delete(symbol), 15000);
@@ -213,10 +219,11 @@ async function executeFullOpen(
 
     updateDecisionStatus(decId, "success");
 
-    // 检测是否已有持仓 → 追仓模式：合并到已有记录，排除 partial_open 子记录
+    // 检测是否已有同方向持仓 → 追仓模式：合并到已有记录，排除 partial_open 子记录
+    // ⚠️ 必须按 side 过滤，避免方向翻转后把旧空仓当成新多仓的「追仓」合并
     const existingTrade = db.prepare(
-      "SELECT id, entry_qty, entry_price, leverage FROM trades WHERE symbol=? AND status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1"
-    ).get(symbol) as any;
+      "SELECT id, entry_qty, entry_price, leverage FROM trades WHERE symbol=? AND side=? AND status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1"
+    ).get(symbol, side) as any;
 
     if (existingTrade) {
       const safeLev = Math.min(leverage, existingTrade.leverage || leverage);

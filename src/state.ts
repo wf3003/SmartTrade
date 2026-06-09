@@ -337,16 +337,23 @@ export function applySymbolAnalysis(bySymbol: {symbol: string; analysis: string}
   }
 }
 
-/** 从复盘 blockSymbols 对指定币种降权 */
+/** 从复盘 blockSymbols 对指定币种降权+压仓位+持久化（留小仓试错通道） */
 export function applyBlockSymbols(blockSymbols: string[]): void {
   for (const sym of blockSymbols) {
     if (typeof sym !== "string") continue;
+    // 评分轻降：保留高分过门槛的能力（最低 0.5，每次 -0.2）
     const cur = symbolScoreMult.get(sym) ?? 1.0;
-    if (cur <= 0.3) continue;
-    const nv = Math.max(0.3, cur - 0.4);
+    if (cur <= 0.5) continue;
+    const nv = Math.max(0.5, cur - 0.2);
     symbolScoreMult.set(sym, nv);
-    logger.info(`⚙️ ${sym} 复盘→blockSymbols 降权 scoreMult=${nv.toFixed(2)}`);
+    // 仓位重降：留小仓试错通道（最低 0.2，每次 ×0.4）
+    const posCur = symbolPositionMult.get(sym) ?? 1.0;
+    const posNv = Math.max(0.2, posCur * 0.4);
+    symbolPositionMult.set(sym, posNv);
+    logger.info(`⚙️ ${sym} 复盘→blockSymbols 降权 scoreMult=${nv.toFixed(2)} posMult=${posNv.toFixed(2)}`);
   }
+  // 持久化（重启不丢失）
+  saveFeedbackToDb({ blockSymbols }).catch(() => {});
 }
 
 /** 从 blockSignals 提取信号类型惩罚 */
@@ -417,6 +424,14 @@ export function applyWinRateReward(trades: any[]): void {
     else if (winRate >= 0.50 && total >= 4) { mult = 1.2; logger.info(`⚙️ ${sym} 胜率${(winRate*100).toFixed(0)}%(${data.wins}W/${total-data.wins}L) → 仓位x1.2`); }
     else if (winRate <= 0.20 && total >= 3) { mult = 0.3; logger.info(`⚙️ ${sym} 胜率${(winRate*100).toFixed(0)}%(${data.wins}W/${total-data.wins}L) PnL:$${totalPnl.toFixed(2)} → 仓位x0.3`); }
     else if (winRate <= 0.35 && total >= 3) { mult = 0.5; logger.info(`⚙️ ${sym} 胜率${(winRate*100).toFixed(0)}%(${data.wins}W/${total-data.wins}L) PnL:$${totalPnl.toFixed(2)} → 仓位x0.5`); }
+    // 净亏损惩罚：超过阈值强制降低仓位（不写死币种）
+    if (totalPnl < -20 && total >= 3) {
+      mult = Math.min(mult, 0.2);
+      logger.info(`⚙️ ${sym} 净亏$${totalPnl.toFixed(2)}(${data.wins}W/${total-data.wins}L) → 仓位降至x0.2`);
+    } else if (totalPnl < -50 && total >= 5) {
+      mult = Math.min(mult, 0.1);
+      logger.info(`⚙️ ${sym} 净亏$${totalPnl.toFixed(2)}(${data.wins}W/${total-data.wins}L) → 仓位降至x0.1`);
+    }
     symbolPositionMult.set(sym, mult);
   }
 }
