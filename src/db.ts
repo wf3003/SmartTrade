@@ -675,7 +675,7 @@ export function seedInterceptParams(): void {
     ["regime_strong_threshold", 40, "强趋势ADX下限"],
     ["aggressiveness", 25, "全局激进程度(0-100)"],
     ["max_consecutive_losses", 3, "连续亏损上限(超此数暂停币种)"],
-    ["max_chase_count", 3, "同一持仓最大追仓次数"],
+    ["max_chase_count", 5, "同一持仓最大追仓次数"],
   ];
   const now = new Date().toISOString();
   const ins = db.prepare("INSERT INTO intercept_params (param_name,param_value,param_default,description,last_adjusted) VALUES (?,?,?,?,?)");
@@ -729,7 +729,7 @@ export function getInterceptParams(): Map<string, number> {
   m.set("regime_weak_threshold", m.get("regime_weak_threshold") ?? 25);
   m.set("regime_strong_threshold", m.get("regime_strong_threshold") ?? 40);
   m.set("aggressiveness", m.get("aggressiveness") ?? 25);
-  m.set("max_chase_count", m.get("max_chase_count") ?? 3);
+  m.set("max_chase_count", m.get("max_chase_count") ?? 5);
   m.set("max_consecutive_losses", m.get("max_consecutive_losses") ?? 3);
   return m;
 }
