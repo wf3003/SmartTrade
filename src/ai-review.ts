@@ -145,17 +145,23 @@ export function buildTradeSummary(trades: any[]): string {
 
 export function buildSymbolStats(trades: any[]): string {
   if (!trades) return "";
-  const map: Record<string, {pnl:number; w:number; l:number; ct:string[]}> = {};
+  const map: Record<string, {pnl:number; w:number; l:number; lp:number; wp:number; sp:number; sw:number; sl:number}> = {};
   for (const t of trades) {
     if (t.status !== "closed") continue;
     const s = t.symbol;
-    if (!map[s]) map[s] = {pnl:0, w:0, l:0, ct:[]};
-    map[s].pnl += t.pnl||0;
-    (t.pnl||0) >= 0 ? map[s].w++ : map[s].l++;
-    if (t.close_type) map[s].ct.push(t.close_type);
+    if (!map[s]) map[s] = {pnl:0,w:0,l:0,lp:0,wp:0,sp:0,sw:0,sl:0};
+    const p = t.pnl||0;
+    map[s].pnl += p;
+    p >= 0 ? map[s].w++ : map[s].l++;
+    if (p >= 0) map[s].wp += p; else map[s].lp += p;
+    if (t.side === "long") { p >= 0 ? map[s].sw++ : map[s].sl++; map[s].sp += p; }
   }
   return Object.entries(map).map(([sym, s]) => {
-    const t = s.w+s.l, wr = t>0?(s.w/t*100).toFixed(0):"0";
-    return `${sym}: ${s.w}胜${s.l}负(${wr}%) 净盈亏:$${s.pnl.toFixed(2)} | 出场:${[...new Set(s.ct)].join(",")}`;
+    const t = s.w+s.l;
+    const totWr = t>0 ? (s.w/t*100).toFixed(0) : "0";
+    const lWr = (s.sw+s.sl) > 0 ? (s.sw/(s.sw+s.sl)*100).toFixed(0) : "-";
+    const longPnl = s.sp;
+    const shortPnl = s.pnl - s.sp;
+    return `${sym}: ${s.w}胜${s.l}负(${totWr}%) 净盈亏:$${s.pnl.toFixed(2)} | 做多:${s.sw}胜${s.sl}负(${lWr}%) $${longPnl.toFixed(2)} 做空:$${shortPnl.toFixed(2)}`;
   }).join("\n");
 }

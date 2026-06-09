@@ -15,7 +15,7 @@ import { getMarketReport } from "./agent";
 import { checkExtremeDeviation, calcMACD, calcIndicators, convertCandles } from "./indicators";
 import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
-import { setLatestReport, atrCache, rsiCache, indicatorCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward, applyOptRules, getPositionRuleMultiplier, optRulesCache, loadOptRulesFromDb, interceptParamsCache, loadInterceptParamsFromDb } from "./state";
+import { setLatestReport, atrCache, rsiCache, indicatorCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward, applyOptRules, getPositionRuleMultiplier, optRulesCache, loadOptRulesFromDb, interceptParamsCache, loadInterceptParamsFromDb, autoAdjustAggressiveness } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
 import { aiTradeReview, buildTradeSummary, buildSymbolStats, buildDecisionAnalysis } from "./ai-review";
 import { 
@@ -231,8 +231,8 @@ async function executeFullOpen(
       const mainNotional = confirmed.qty * confirmed.entryPrice * mainContractSize;
       db.prepare("UPDATE trades SET entry_qty=?, entry_price=?, leverage=?, notional=?, margin=?, side=? WHERE id=?")
         .run(confirmed.qty, confirmed.entryPrice, safeLev, mainNotional, mainNotional / safeLev, side, existingTrade.id);
-      // 追仓后仓位已变，用交易所实时 PnL 重新初始化峰值
-      peakPnlMap.set(symbol, confirmed?.unrealizedPnlPct || 0);
+      // 追仓后仓位已变，用交易所实时 PnL 初始化峰值（直接取，不用 ||0 遮盖 0）
+      peakPnlMap.set(symbol, confirmed?.unrealizedPnlPct ?? 0);
       logger.warn(`✅ 追仓: ${symbol} ${side} +${qty}张 @$${fillPrice} ${safeLev}x (交易所合并:${confirmed.qty}张 @$${confirmed.entryPrice})`);
       return { success: true, fillPrice };
     }
@@ -1084,6 +1084,8 @@ async function scheduleReview(currentCycle: number, tickers: Map<string, any>) {
           state.scoringAdvice = parsed.scoringAdvice;
           logger.info(`⚙️ 复盘→AI评分校准: ${parsed.scoringAdvice.slice(0, 80)}${parsed.scoringAdvice.length > 80 ? "..." : ""}`);
         }
+        // 4b. 自动恢复/收紧 aggressiveness（防只降不升）
+        autoAdjustAggressiveness(allTrades);
         logger.info(`📊 复盘反馈已应用完成`);
         // 持久化到数据库，防止进程重启丢失
         saveFeedbackToDb().catch(() => {});

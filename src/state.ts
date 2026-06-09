@@ -436,6 +436,30 @@ export function applyWinRateReward(trades: any[]): void {
   }
 }
 
+/** aggressiveness 自动恢复：当最近交易可持续盈利时上调油门 */
+export function autoAdjustAggressiveness(trades: any[]): void {
+  const closed = (trades || []).filter((t: any) => t.status === "closed").slice(-10);
+  if (closed.length < 5) return;
+  const wins = closed.filter((t: any) => (t.pnl || 0) > 0).length;
+  const winRate = wins / closed.length;
+  const netPnl = closed.reduce((s: number, t: any) => s + (t.pnl || 0), 0);
+  const cur = interceptParamsCache.get("aggressiveness") ?? 25;
+  const maxAgg = 45;
+  if (winRate >= 0.70 && netPnl > 0 && cur < maxAgg) {
+    const nv = Math.min(maxAgg, cur + 5);
+    const { updateInterceptParam } = require("./db");
+    updateInterceptParam("aggressiveness", nv);
+    interceptParamsCache.set("aggressiveness", nv);
+    logger.info(`⚙️ 自动恢复: 近期${closed.length}笔胜率${(winRate*100).toFixed(0)}%净利$${netPnl.toFixed(2)}, aggressiveness ${cur}→${nv}`);
+  } else if (winRate < 0.40 && netPnl < 0 && cur > 5) {
+    const nv = Math.max(5, cur - 3);
+    const { updateInterceptParam } = require("./db");
+    updateInterceptParam("aggressiveness", nv);
+    interceptParamsCache.set("aggressiveness", nv);
+    logger.info(`⚙️ 自动收紧: 近期${closed.length}笔胜率${(winRate*100).toFixed(0)}%净亏${netPnl.toFixed(2)}, aggressiveness ${cur}→${nv}`);
+  }
+}
+
 /** 启动时强制覆盖硬性惩罚 */
 export function ensureHardPenalties(): void {
   if (!signalScorePenalty.has("sync_rebuild")) {
