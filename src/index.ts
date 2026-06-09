@@ -267,15 +267,7 @@ process.on("uncaughtException", (err) => {
 });
 
 async function main() {
-  // undici 代理：让所有 fetch（ccxt/exchange）走代理
-  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
-  if (proxy) {
-    try {
-      const { ProxyAgent, setGlobalDispatcher } = await import("undici");
-      setGlobalDispatcher(new ProxyAgent(proxy));
-      logger.info(`[undici] 代理已设置: ${proxy}`);
-    } catch (e: any) { logger.warn(`[undici] 代理失败: ${e.message}`); }
-  }
+
   // 打印版本（从 .version 文件读取）
   try {
     const fs = await import("fs");
