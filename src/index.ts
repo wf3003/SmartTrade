@@ -501,9 +501,7 @@ async function aiDecisionCycle() {
     const aiResult = await aiPromise;
     if (aiResult) {
       report.summary = aiResult.summary || "AI 审核完成";
-      // SA-Trend 开仓的币种不被 AI 平仓
-      const saOpenSymbols = new Set(directSigs.map((s: any) => s.symbol));
-      if (aiResult.positions) report.positions = aiResult.positions.filter((p: any) => !saOpenSymbols.has(p.symbol));
+      if (aiResult.positions) report.positions = aiResult.positions;
       const aiOnly = (aiResult.signals || []).filter((s: any) => !directSigs.some((ds: any) => ds.symbol === s.symbol && ds.action === s.action));
       report.signals = [...directSigs, ...aiOnly];
       report.aiReview = report.signals.map((s: any) => ({ symbol: s.symbol, score: (s.confidence || 5) * 10, reason: s.reason || "" }));
@@ -543,6 +541,7 @@ async function aiDecisionCycle() {
         (report as any).tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "启动保护中" });
       }
     } else if (report.signals && report.signals.length > 0) {
+      let authorizedFlip = false;
       const actionable = report.signals
         .filter((t: any) => t.action !== "hold")
         .sort((a: any, b: any) => (b.confidence || 0) - (a.confidence || 0))
@@ -558,22 +557,33 @@ async function aiDecisionCycle() {
         logger.info(`📋 本轮规则引擎无开仓`);
         execLog.push("AI 全部观望，无开仓");
       } else if (risk.accountStop || !risk.allowOpen) {
-        const reason = risk.reason || "未知原因";
-        logger.warn(`⚠️ 风控阻止开仓: ${reason}`);
-        execLog.push(`风控阻止: ${reason}`);
-        // 记录被风控跳过的新开仓尝试
-        for (const trade of actionable) {
-          const skipId = insertDecision({
-            time: new Date().toISOString(), ai_model: CONFIG.ai.model,
-            signal: trade.action, symbol: trade.symbol, action: trade.action,
-            leverage: trade.leverage, amount: trade.amountPercent,
-            reason: `风控阻止: ${reason}`,
-            confidence: trade.confidence,
-            raw_response: JSON.stringify(trade),
-          });
-          updateDecisionStatus(skipId, "skipped");
+        const flipTrades = actionable.filter((t: any) => positions.some((p: any) => p.symbol === t.symbol && p.side !== (t.action==="buy"?"long":"short")));
+        const newTrades = actionable.filter((t: any) => !flipTrades.includes(t));
+        if (newTrades.length > 0) {
+          const reason = risk.reason || "未知原因";
+          logger.warn(`⚠️ 风控阻止开仓: ${reason}`);
+          execLog.push(`风控阻止: ${reason}`);
+          for (const trade of newTrades) {
+            const skipId = insertDecision({
+              time: new Date().toISOString(), ai_model: CONFIG.ai.model,
+              signal: trade.action, symbol: trade.symbol, action: trade.action,
+              leverage: trade.leverage, amount: trade.amountPercent,
+              reason: `风控阻止: ${reason}`, confidence: trade.confidence,
+              raw_response: JSON.stringify(trade),
+            });
+            updateDecisionStatus(skipId, "skipped");
+          }
         }
-      } else {
+        if (flipTrades.length > 0) {
+          logger.warn(`⚠️ 风控允许方向翻转: ${flipTrades.map((t:any)=>t.symbol).join(",")}`);
+          execLog.push(`方向翻转允许: ${flipTrades.map((t:any)=>t.symbol).join(",")}`);
+          actionable.length = 0;
+          for (const ft of flipTrades) actionable.push(ft);
+          const isFlipOnly = newTrades.length === 0;
+          if (isFlipOnly) authorizedFlip = true;
+        }
+      }
+      if (actionable.length > 0 && (!risk.accountStop || authorizedFlip)) {
       const existingSymbols = new Set([
         ...positions.map(p => p.symbol),
         ...openedThisSession,

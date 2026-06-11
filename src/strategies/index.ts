@@ -49,6 +49,8 @@ export interface DirectTradeSignal {
   regime1h?: string;
   suggestedLeverage?: number;
   suggestedAmountPct?: number;
+  leverage?: number;
+  amountPercent?: number;
 }
 
 export interface StrategyReport {
@@ -329,6 +331,7 @@ export async function runStrategyEngine(
           confidence: Math.max(1, Math.min(10, Math.round((s.confidence||0) / 10))),
           riskFlag: "", reason: (s.reason||"").slice(0, 100),
           regime: "→", regime1h: "→",
+          leverage: d.adjustedLeverage, amountPercent: d.adjustedAmountPct,
           suggestedLeverage: d.adjustedLeverage, suggestedAmountPct: d.adjustedAmountPct,
         });
       }
