@@ -10,7 +10,6 @@ import { logger } from "../logger";
 import { exchangeManager } from "../exchanges";
 import { atrCache } from "../state";
 import { checkStopLoss } from "../risk";
-import { updateTrailingStop, isChandelierTriggered, clearTrailingStop, getAtrAbs, trailingStopPrice } from "../risk/atrStop";
 import { newPositionTime, recentlyClosed, recentlyOpened, getPeak } from "./shared";
 import { getLatestOpenTrades } from "../db";
 import { executeFullClose } from "../close-executor";
@@ -34,7 +33,7 @@ async function tick() {
 
       const openedAt = newPositionTime.get(pos.symbol);
       const posAge = openedAt ? Date.now() - openedAt : 99999;
-      const isNewPosition = posAge < 60_000;
+      const isNewPosition = posAge < 30_000;
 
       // --- 1. ATR 止损 ---
       if (isNewPosition) {
@@ -56,30 +55,6 @@ async function tick() {
           logger.warn(`🛑 ${slResult.description} | ${pos.symbol}`);
           await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, slResult.level);
           continue;
-        }
-        // --- PnL% 硬顶: 亏损超 5% 强制平仓（数据库 max_stop_loss_pct 控制） ---
-        const maxSl = ((await import("../state")).interceptParamsCache.get("max_stop_loss_pct") ?? 500) / 100;
-        if (pnlPct <= -Math.max(2, maxSl)) {
-          logger.warn(`🛑 PnL硬止损: ${pos.symbol} 亏损${pnlPct.toFixed(1)}% 超${maxSl}%上限`);
-          await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "pnl_hard_stop");
-          clearTrailingStop(pos.symbol);
-          continue;
-        }
-        // --- 吊灯止损: 价格维度跟踪（只升不降/只降不升） ---
-        const price = Math.abs(pnlPct) > 0 && pos.entryPrice > 0
-          ? pos.side === "long"
-            ? pos.entryPrice * (1 + pnlPct / 100 / (pos.leverage || 1))
-            : pos.entryPrice * (1 - pnlPct / 100 / (pos.leverage || 1))
-          : 0;
-        if (price > 0) {
-          const atrAbs = getAtrAbs(pos.symbol, price);
-          updateTrailingStop(pos.symbol, price, atrAbs, pos.side, 3);
-          if (isChandelierTriggered(price, pos.side, pos.symbol)) {
-            logger.warn(`🛑 吊灯止损: ${pos.symbol} ${pos.side} 触发 | 现价$${price.toFixed(2)} 止损线$${(trailingStopPrice.get(pos.symbol)??0).toFixed(2)} ATR=$${atrAbs.toFixed(2)} pnl=${pnlPct.toFixed(2)}%`);
-            clearTrailingStop(pos.symbol);
-            await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "trailing_stop");
-            continue;
-          }
         }
       }
 

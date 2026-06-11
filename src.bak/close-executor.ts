@@ -7,7 +7,6 @@ import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
 import { db, getLatestOpenTrades, closeTrade, updateSnapshotResult, updatePeakPnlInDb } from "./db";
 import { peakPnlMap, partialCloseMap, recentlyClosed } from "./monitors/shared";
-import { clearTrailingStop } from "./risk/atrStop";
 
 // ---- 方向连败跟踪 (原 index.ts directionLoss) ----
 export const directionLoss = new Map<string, { count: number; blockUntil: number }>();
@@ -36,7 +35,6 @@ export async function executeFullClose(
 ): Promise<{ closeResult: any; actualPnl: number; actualPnlPct: number }> {
   // 抢先标记为"关闭中"，防止监控器和AI循环同时平同一仓位
   recentlyClosed.add(symbol);
-  clearTrailingStop(symbol);
   // 平仓前重新拉一次持仓，拿到最新快照盈亏
   let snapPnl = pnl, snapPnlPct = pnlPct;
   try {

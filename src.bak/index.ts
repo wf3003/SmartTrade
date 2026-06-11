@@ -9,8 +9,10 @@
 import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
+import { generateStrategyReport } from "./strategy";
 import { runStrategyEngine } from "./strategies/index";
 import { getMarketReport, signalToTrade } from "./agent";
+import { checkExtremeDeviation, calcMACD, calcIndicators, convertCandles } from "./indicators";
 import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, indicatorCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward, applyOptRules, getPositionRuleMultiplier, optRulesCache, loadOptRulesFromDb, interceptParamsCache, loadInterceptParamsFromDb, autoAdjustAggressiveness } from "./state";
@@ -473,45 +475,31 @@ async function aiDecisionCycle() {
     logger.info(`📡 K线:${ohlcvData.size}/${CONFIG.symbols.length}币种 行情:${tickers.size}/${CONFIG.symbols.length}币种`);
     
     // === 策略引擎: 三个独立策略分析 ===
-    const strategyReport = await runStrategyEngine(tickers, ohlcvData, positions, account);
+    const strategyReport = runStrategyEngine(tickers, ohlcvData, positions, account);
     logger.info(`📡 策略引擎: ${strategyReport.analyses.length}币种 | ${strategyReport.summary}`);
     // 策略引擎已填充 indicatorCache，更新当前行情名
     currentRegimeName = getOverallRegime();
     logger.info(`📊 当前行情: ${currentRegimeName}`);
     
-    // === SA-Trend 立即推网页（不等 AI） ===
-    const directSigs = ((strategyReport as any).directSignals || []) as any[];
-
-    // AI 后台运行，不阻塞 SA-Trend
-    const aiPromise = getMarketReport(strategyReport, positions, account, recentDecs, openTrades).catch(() => null);
-
-    const report: any = {
-      analysis: [],
-      signals: directSigs,
-      positions: [],
-      summary: "⏳ AI 分析中...",
-      saTrend: directSigs,
-      aiReview: [],
-    };
-    logger.info(`📡 SA-Trend 推送: ${directSigs.length}信号`);
+    // === AI 投资委员会主席: 综合决策 ===
+    const aiReport = await getMarketReport(strategyReport, positions, account, recentDecs, openTrades);
+    if (!aiReport) { logger.warn("AI主席未返回决策"); return; }
+    
+    const report = aiReport as any;
+    // 注入 aiReview 供前端展示
+    {
+      const aiReviewArr: any[] = [];
+      for (const t of report.signals) {
+        aiReviewArr.push({
+          symbol: t.symbol,
+          score: (t.confidence || 5) * 10,
+          reason: t.reason || "",
+        });
+      }
+      (report as any).aiReview = aiReviewArr;
+    }
     setLatestReport(report);
     newCycle();
-
-    // === 等 AI 返回后再合并信号并开仓 ===
-    const aiResult = await aiPromise;
-    if (aiResult) {
-      report.summary = aiResult.summary || "AI 审核完成";
-      // SA-Trend 开仓的币种不被 AI 平仓
-      const saOpenSymbols = new Set(directSigs.map((s: any) => s.symbol));
-      if (aiResult.positions) report.positions = aiResult.positions.filter((p: any) => !saOpenSymbols.has(p.symbol));
-      const aiOnly = (aiResult.signals || []).filter((s: any) => !directSigs.some((ds: any) => ds.symbol === s.symbol && ds.action === s.action));
-      report.signals = [...directSigs, ...aiOnly];
-      report.aiReview = report.signals.map((s: any) => ({ symbol: s.symbol, score: (s.confidence || 5) * 10, reason: s.reason || "" }));
-      setLatestReport(report);
-      logger.info(`📡 AI 审核完成: ${aiOnly.length}AI信号, ${(aiResult.positions||[]).length}平仓指令`);
-    } else {
-      logger.warn("AI 未返回，仅执行 SA-Trend 信号");
-    }
     
     // === AI close：执行平仓指令 ===
     const execLog: string[] = [];
@@ -547,9 +535,6 @@ async function aiDecisionCycle() {
         .filter((t: any) => t.action !== "hold")
         .sort((a: any, b: any) => (b.confidence || 0) - (a.confidence || 0))
         .map((sig: any) => {
-          if (sig.suggestedLeverage && sig.suggestedAmountPct) {
-            return { ...sig, leverage: sig.suggestedLeverage, amountPercent: sig.suggestedAmountPct, stopLossPct: 5, takeProfitPct: 15 };
-          }
           const rt = signalToTrade(sig, currentRegimeName);
           return rt ? { ...sig, ...rt, stopLossPct: 5, takeProfitPct: 15 } : null;
         })
@@ -654,6 +639,15 @@ async function aiDecisionCycle() {
           execLog.push(msg);
           try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, mq }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
           continue;
+        } else if (mq < 40) {
+          const mqLoMult = (interceptParamsCache.get("pos_mq_mult_low") ?? 40) / 100;
+          trade.amountPercent = Math.round(trade.amountPercent * mqLoMult);
+          trade.leverage = Math.max(2, trade.leverage - 2);
+          logger.info(`   ${trade.symbol} 行情质量${mq}，仓位乘数${mqLoMult}×至${trade.amountPercent}%，杠杆降至${trade.leverage}x`);
+        } else if (mq < 70) {
+          const mqMdMult = (interceptParamsCache.get("pos_mq_mult_med") ?? 60) / 100;
+          trade.amountPercent = Math.round(trade.amountPercent * mqMdMult);
+          logger.info(`   ${trade.symbol} 行情质量${mq}，仓位乘数${mqMdMult}×至${trade.amountPercent}%`);
         }
 
 
@@ -689,9 +683,9 @@ async function aiDecisionCycle() {
             try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, entryScore }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
             continue;
           } else if (entryScore < eqThreshold + 20) {
-            // 入场质量减半已关闭
-            logger.info(`   ${trade.symbol} 入场质量${entryScore}<${eqThreshold+20}（仓位缩放已关闭）`);
-          } else if (!CONFIG.bypassQualityFilters && entryScore < 20) {
+            trade.amountPercent = Math.round(trade.amountPercent * 0.5);
+            logger.info(`   ${trade.symbol} 入场质量${entryScore}<${eqThreshold+20}，仓位减半至${trade.amountPercent}%`);
+          } else if (!CONFIG.bypassQualityFilters && sa.entryQuality.suggestion === "unfavorable") {
             const msg = `⏭️ ${trade.symbol} 入场质量评级 unfavorable，当前周期不开新仓`;
             tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "入场质量unfavorable" });
             logger.info(msg);
@@ -701,9 +695,13 @@ async function aiDecisionCycle() {
           }
         }
 
-        // 5. 基于历史胜率的仓位乘数：已关闭（Coordinator 凯利分配替代）
-        // 胜率仓位缩放已关闭
-        const posMult = 1.0;
+        // 5. 基于历史胜率的仓位乘数：高胜率币种自动放大仓位
+        const posMult = symbolPositionMult.get(trade.symbol) ?? 1.0;
+        if (posMult !== 1.0) {
+          const origPct = trade.amountPercent;
+          trade.amountPercent = Math.min(CONFIG.basePositionPct * 2, Math.round(trade.amountPercent * posMult));
+          logger.info(`   ${trade.symbol} 胜率仓位乘数x${posMult.toFixed(1)}: ${origPct}%→${trade.amountPercent}%`);
+        }
 
         // 5.5 总仓位保证金上限：所有持仓总 margin 不超过总资金上限
         const existingTotalMargin = positions
@@ -874,11 +872,9 @@ async function aiDecisionCycle() {
       }
       }
     }
-    report.execution = { log: execLog };
-    report.newTrades = report.signals;
+    if (execLog.length > 0 && report.execution) report.execution.log = execLog;
 
     // 策略评分已移除，分析日志改为展示AI方向复核摘要
-    setLatestReport(report);
 
     // 6. AI 交易复盘（每 6 周期≈30 分钟一次，独立定时器，不阻塞决策循环）
     scheduleReview(aiCycleNumber, tickers);

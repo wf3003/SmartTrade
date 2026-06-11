@@ -218,16 +218,16 @@ function buildSupplementalDetail(strategyReport: StrategyReport, symbols: string
   const lines: string[] = [];
   for (const sym of symbols) {
     const output = strategyReport.analyses.find(a => a.symbol === sym);
-    const snaps = (output?.technical as any)?.snapshots as any[];
-    if (!snaps || snaps.length === 0) continue;
+    if (!output || !output.technical.snapshots?.length) continue;
+    const snaps = output.technical.snapshots;
     lines.push(`\n### ${sym}`);
     lines.push(`|周期|涨跌%|ADX|RSI|ATR%|EMA20|BB位置|量比|`);
     lines.push(`|---:|---:|---:|---:|---:|:---:|:---:|:---:|`);
     for (const s of snaps) {
-      lines.push(`|${s.tf}|${s.chg.toFixed(1)}|${s.adx.toFixed(0)}|${s.rsi.toFixed(0)}|${s.atrPct.toFixed(2)}|${s.ema20Up ? "↑" : "↓"}|${s.bbPosition.toFixed(0)}%|${s.volRatio.toFixed(1)}x|`);
+      lines.push(`|${s.tf}|${s.chg.toFixed(1)}|${s.adx.toFixed(0)}|${s.rsi.toFixed(0)}|${s.atr.toFixed(2)}|${s.ema20Up?"↑":"↓"}|${s.bbPosition.toFixed(0)}%|${s.volRatio.toFixed(1)}x|`);
     }
   }
-  return lines.length ? ("详细数据:\n" + lines.join("\n")) : "";
+  return lines.length ? ("详细数据:\n"+lines.join("\n")) : "";
 }
 
 export async function getMarketReport(

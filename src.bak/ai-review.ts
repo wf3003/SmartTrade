@@ -101,8 +101,6 @@ ${symbolStats}
    "adjustIntercepts": "必需! 基于近期被拦截的交易和盈亏结果，判断是否需要调整拦截参数。可调的拦截参数: ${paramVals}。检查已有交易和拦截记录，如果发现某个参数导致的拦截让错过太多盈利机会，就降低阈值；如果某个参数放行的交易频繁亏损，就提高阈值。格式: [{param:\"param_name\", value:新数值, reason:\"基于XX笔交易分析\"}] 至少输出1条建议，不得输出空数组"
 }`;
 
-  // 重试一次机制：第一次失败自动再试
-  for (let retry = 0; retry < 2; retry++) {
   try {
     const resp = await openai.chat.completions.create({
       model: CONFIG.ai.model,
@@ -114,8 +112,7 @@ ${symbolStats}
 
     const text = resp.choices?.[0]?.message?.content || "{}";
     if (text === "{}" || text.length < 20) {
-      logger.warn(`[复盘] AI 返回过短(${text.length}字)，${retry===0?'重试...':'放弃'}`);
-      if (retry === 0) continue;
+      logger.warn(`[复盘] AI 返回过短(${text.length}字): ${text.slice(0, 150)}`);
       return "";
     }
     try {
@@ -123,21 +120,16 @@ ${symbolStats}
       if (parsed.summary || parsed.winners || parsed.losers || parsed.suggestions) {
         return JSON.stringify(parsed, null, 2);
       }
-      logger.warn(`[复盘] 缺关键字段，${retry===0?'重试...':'放弃'}`);
-      if (retry === 0) continue;
+      logger.warn(`[复盘] 缺关键字段: ${text.slice(0, 300)}`);
       return "";
     } catch {
-      logger.warn(`[复盘] 非JSON，${retry===0?'重试...':'放弃'}`);
-      if (retry === 0) continue;
+      logger.warn(`[复盘] 非JSON(${text.length}字): ${text.slice(0, 200)}`);
       return "";
     }
   } catch (e: any) {
-    if (retry === 0) { logger.warn(`[复盘] 重试...`); continue; }
     logger.warn(`[复盘] 异常: ${e.message?.slice(0, 200)}`);
     return "";
   }
-  }
-  return "";
 }
 
 export function buildTradeSummary(trades: any[]): string {

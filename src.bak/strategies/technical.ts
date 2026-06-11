@@ -12,9 +12,11 @@ export interface TechnicalAnalysis {
   confidence: number;
   analysis: string;
   alignmentScore: number;
+  /** 各时间框架原始指标快照，AI可在摘要可疑时请求此详细数值 */
+  snapshots: TfSnapshot[];
 }
 
-interface TfSnapshot {
+export interface TfSnapshot {
   tf: string;
   chg: number;
   adx: number; rsi: number; atr: number;
@@ -110,7 +112,7 @@ export function analyzeTechnicals(
   }
 
   if (snapshots.length < 3) {
-    return { symbol, directionBias: "neutral", confidence: 20, analysis: "数据不足", alignmentScore: 0 };
+    return { symbol, directionBias: "neutral", confidence: 20, analysis: "数据不足", alignmentScore: 0, snapshots: [] };
   }
 
   // === 方向计算 ===
@@ -216,5 +218,5 @@ export function analyzeTechnicals(
     warnings.length ? `风险: ${warnings.join(" | ")}` : "",
   ].filter(Boolean).join("\n");
 
-  return { symbol, directionBias, confidence, analysis, alignmentScore };
+  return { symbol, directionBias, confidence, analysis, alignmentScore, snapshots };
 }

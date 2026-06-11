@@ -678,19 +678,6 @@ export function seedInterceptParams(): void {
     ["aggressiveness", 25, "全局激进程度(0-100)"],
     ["max_consecutive_losses", 3, "连续亏损上限(超此数暂停币种)"],
     ["max_chase_count", 5, "同一持仓最大追仓次数"],
-    ["trend_rsi_lower", 30, "趋势智能体RSI下限"],
-    ["trend_rsi_upper", 70, "趋势智能体RSI上限"],
-    ["trend_adx_min", 25, "趋势智能体ADX最低(确认趋势)"],
-    ["trend_atr_ch_mult", 150, "ATR通道倍数%(如150=1.5x)"],
-    ["trend_bb_lower", 20, "BB下轨阈值%(如20=0.2)"],
-    ["trend_bb_upper", 80, "BB上轨阈值%(如80=0.8)"],
-    ["trend_min_conf", 40, "趋势智能体最低置信度"],
-    ["ci_choppy_threshold", 62, "混沌指数震荡阈值(>62=震荡)"],
-    ["ci_trend_threshold", 38, "混沌指数趋势阈值(<38=趋势)"],
-    ["rev_rsi_oversold", 25, "均值回归RSI超卖线(<25做多)"],
-    ["rev_rsi_overbought", 75, "均值回归RSI超买线(>75做空)"],
-    ["rev_bb_distance", 10, "均值回归BB轨距(%如10=0.1)"],
-    ["rev_min_confidence", 30, "均值回归最低置信度"],
   ];
   const now = new Date().toISOString();
   const ins = db.prepare("INSERT INTO intercept_params (param_name,param_value,param_default,description,last_adjusted) VALUES (?,?,?,?,?)");

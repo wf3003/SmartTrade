@@ -28,16 +28,6 @@ const STRONG_TREND: RegimeDefaults = {
   lev_vol_mult_mid: 110,
   lev_vol_mult_low: 150,
   min_risk_reward_ratio: 150,
-  ci_choppy_threshold: 55,
-  ci_trend_threshold: 30,
-  // TrendAgent 参数
-  trend_rsi_lower: 25,
-  trend_rsi_upper: 75,
-  trend_adx_min: 20,
-  trend_atr_ch_mult: 180,
-  trend_bb_lower: 15,
-  trend_bb_upper: 85,
-  trend_min_conf: 35,
 };
 
 /** 弱趋势行情 (ADX 25-40) */
@@ -58,16 +48,6 @@ const WEAK_TREND: RegimeDefaults = {
   lev_vol_mult_mid: 100,
   lev_vol_mult_low: 140,
   min_risk_reward_ratio: 150,
-  ci_choppy_threshold: 55,
-  ci_trend_threshold: 30,
-  // TrendAgent 参数
-  trend_rsi_lower: 25,
-  trend_rsi_upper: 75,
-  trend_adx_min: 20,
-  trend_atr_ch_mult: 180,
-  trend_bb_lower: 15,
-  trend_bb_upper: 85,
-  trend_min_conf: 35,
 };
 
 /** 震荡偏多/偏空 (ADX 18-25): 方向不明，保守为主 */
@@ -118,16 +98,6 @@ const PURE_OSCILLATION: RegimeDefaults = {
   eq_momentum_decay_p: 18,
   eq_bb_mild_ob_lp: 8,
   eq_bb_mild_os_sp: 8,
-  ci_choppy_threshold: 55,
-  ci_trend_threshold: 35,
-  // TrendAgent 参数（纯震荡：最保守，不轻易追趋势）
-  trend_rsi_lower: 35,
-  trend_rsi_upper: 65,
-  trend_adx_min: 30,
-  trend_atr_ch_mult: 100,
-  trend_bb_lower: 20,
-  trend_bb_upper: 80,
-  trend_min_conf: 50,
 };
 
 /** unknown / 初始状态：中性参数 */
@@ -148,16 +118,6 @@ const UNKNOWN: RegimeDefaults = {
   lev_vol_mult_mid: 100,
   lev_vol_mult_low: 150,
   min_risk_reward_ratio: 150,
-  ci_choppy_threshold: 55,
-  ci_trend_threshold: 30,
-  // TrendAgent 参数
-  trend_rsi_lower: 25,
-  trend_rsi_upper: 75,
-  trend_adx_min: 20,
-  trend_atr_ch_mult: 180,
-  trend_bb_lower: 15,
-  trend_bb_upper: 85,
-  trend_min_conf: 35,
 };
 
 export function getRegimeDefaults(regime: string): Map<string, number> {

@@ -48,25 +48,6 @@ async function tick() {
         continue;
       }
 
-      // --- 均值回归出场: 价格回到 BB 中线 → 平仓锁利 ---
-      const { indicatorCache } = await import("../state");
-      const indData = indicatorCache.get(symbol);
-      if (indData?.regime?.includes("震荡") || indData?.regime?.includes("纯震荡")) {
-        // 均值回归策略：目标价 = BB 中线
-        // 价格已穿过中线 → 达到目标，平仓
-        const price = pos.entryPrice > 0 && pos.unrealizedPnlPct !== undefined
-          ? pos.side === "long" ? pos.entryPrice * (1 + pnlPct / 100 / (pos.leverage || 1))
-            : pos.entryPrice * (1 - pnlPct / 100 / (pos.leverage || 1))
-          : 0;
-        // 简易判断：PnL%>0 且当日行情纯震荡 → 反转出场概率高
-        if (pnlPct > 1 && price > 0) {
-          // 行情为震荡 + 浮盈>1% → 可能已到 BB 中线
-          logger.info(`🔁 均值回归出场: ${symbol} 震荡行情浮盈${pnlPct.toFixed(1)}%`);
-          await executeFullClose(symbol, pos.side, pos.qty, 0, pnlPct, "reversion_tp");
-          continue;
-        }
-      }
-
       // --- 3. 盈利回吐全平 (峰值≥5%, 回撤到亏损) ---
       const trailLev = Math.max(posLev, 1);
       const peakPrice = peakPnl / trailLev;

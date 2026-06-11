@@ -99,15 +99,49 @@ export function checkProfitProtect(
 ): { shouldClose: boolean; reason: string } | null {
   if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
 
-  // 动态比例止盈：峰值越高锁得越紧（同 nof1.ai 规则）
-  // 比例 = min(0.7, 0.4 + 峰值/100)，+6%锁46%，+20%锁60%，+30%锁70%
-  const trailRatio = Math.min(0.7, 0.4 + peakPnlPct / 100);
-  const line = Math.max(peakPnlPct * trailRatio, 1.5);
+  // ATR跟踪止盈：trail = peak - (atr% × 杠杆 × trail_mult), 至少要保峰值的10%
+  const trailMult = (interceptParamsCache.get("trail_pnl_atr_mult") ?? 150) / 100;
+  let trailDist = atrPct > 0 && leverage > 1
+    ? Math.max(atrPct * leverage * trailMult, peakPnlPct * 0.1)
+    : peakPnlPct * 0.3;
+  // 盈利>=6%时按比例给回撤空间，不再一刀切3个点
+  if (peakPnlPct >= 15) {
+    trailDist = Math.max(trailDist, peakPnlPct * 0.40, 4);
+  } else if (peakPnlPct >= 10) {
+    trailDist = Math.max(trailDist, peakPnlPct * 0.35, 3);
+  } else if (peakPnlPct >= 6) {
+    trailDist = Math.max(trailDist, peakPnlPct * 0.25, 2);
+  }
+  const trailLine = peakPnlPct - trailDist;
 
-  if (currentPnlPct < line) {
+  // 阶梯式回撤保护：峰值越高，保护越紧（防59%→14%式大幅回吐）
+  // 放宽小峰值保护，避免过早触发（如AAVE +4.9%→0触发离场）
+  let protectRatio: number;
+  if (peakPnlPct > 50) {
+    protectRatio = 0.60; // 峰值>50%→保留60%，最多回撤40%
+  } else if (peakPnlPct > 30) {
+    protectRatio = 0.50; // 峰值>30%→保留50%
+  } else if (peakPnlPct > 15) {
+    protectRatio = 0.35; // 峰值>15%→保留35%
+  } else {
+    protectRatio = 0.45; // 峰值≤15%→保留45%（防微盈回吐）
+  }
+  const fullPct = (interceptParamsCache.get("profit_protect_retrace_pct") ?? 30) / 100;
+  // 小峰值回撤下限：避免 protectRatio 过于宽松时净值回吐
+  const minLine = (interceptParamsCache.get("profit_protect_min_line") ?? 0.5);
+  const fullLine = Math.max(peakPnlPct * Math.max(protectRatio, fullPct), minLine);
+
+  // 硬回撤上限：无论峰值多高，最多回撤 N 个百分点（优先保留盈利）
+  const maxRetracePp = (interceptParamsCache.get("profit_protect_max_retrace_pp") ?? 5);
+  const absoluteLine = peakPnlPct - maxRetracePp;
+
+  // 取最紧的线：ATR 跟踪 vs 阶梯回撤 vs 硬回撤，谁先触发用谁
+  const useLine = Math.max(trailLine, fullLine, absoluteLine);
+
+  if (currentPnlPct < useLine) {
     return {
       shouldClose: true,
-      reason: `动态止盈: 峰值${peakPnlPct.toFixed(1)}%,比例${(trailRatio*100).toFixed(0)}%,跌破${line.toFixed(1)}%→平仓`,
+      reason: `跟踪止盈: 峰值${peakPnlPct.toFixed(1)}%→当前${currentPnlPct.toFixed(1)}%,跌破${useLine.toFixed(1)}%(ATR:${trailLine.toFixed(1)}% / 固定:${fullLine.toFixed(1)}%)`,
     };
   }
   return null;
@@ -125,7 +159,7 @@ export function checkStopLoss(
   atrPct: number = 0.015,
   atrMult: number = 2,
 ): StopLossResult | null {
-  const maxSl = (interceptParamsCache.get("max_stop_loss_pct") ?? 500) / 100;
+  const maxSl = (interceptParamsCache.get("max_stop_loss_pct") ?? 2000) / 100;
   const stopThreshold = Math.max(2, Math.min(maxSl, atrPct * 100 * atrMult * leverage));
   if (currentPnlPct <= -stopThreshold) {
     return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × ${atrMult} × ${leverage}x = ${stopThreshold.toFixed(1)}%)` };
