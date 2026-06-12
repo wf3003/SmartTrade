@@ -1,25 +1,21 @@
 /**
- * 止损监控器 — 独立于 AI 决策循环，每 2 秒运行
- * 
- * 检查项:
- *   1. ATR 动态止损 (趋势 4×ATR / 震荡 2×ATR)
- *   2. 时间止损 (>4h 从未盈利, 亏损 ≥ -2%)
- *   3. 无盈利平仓 (>120min 从不超过 +0.5%, 当前亏损)
+ * 止损监控器 — SuperFilter版
+ * 检查 A-V2 止盈止损 + 时间止损
  */
 import { logger } from "../logger";
 import { exchangeManager } from "../exchanges";
-import { atrCache } from "../state";
-import { checkStopLoss } from "../risk";
-import { updateTrailingStop, isChandelierTriggered, clearTrailingStop, getAtrAbs, trailingStopPrice } from "../risk/atrStop";
-import { newPositionTime, recentlyClosed, recentlyOpened, getPeak } from "./shared";
-import { getLatestOpenTrades } from "../db";
+import { clearTrailingStop } from "../risk/atrStop";
+import { newPositionTime, recentlyClosed, recentlyOpened, av2StopPrice, av2TpPrice, av2TrailingLine, peakPnlMap } from "./shared";
+import { updatePeakPnlInDb, getLatestOpenTrades } from "../db";
 import { executeFullClose } from "../close-executor";
 
 const INTERVAL_MS = 2_000;
-
+const BACKOFF_MS = 30_000;
 let _timer: ReturnType<typeof setInterval> | null = null;
+let _backoff = false;
 
 async function tick() {
+  if (_backoff) return;
   try {
     const positions = await exchangeManager.getPositions();
     if (!positions.length) return;
@@ -30,103 +26,80 @@ async function tick() {
       if (!pos.qty || pos.qty <= 0) continue;
 
       const pnlPct = pos.unrealizedPnlPct || 0;
-      const peakPnl = getPeak(pos.symbol);
-
       const openedAt = newPositionTime.get(pos.symbol);
-      const posAge = openedAt ? Date.now() - openedAt : 99999;
-      const isNewPosition = posAge < 60_000;
-
-      // --- 1. ATR 止损 ---
-      if (isNewPosition) {
-        if (pnlPct <= -15) {
-          logger.warn(`🛑 新仓宽止损: ${pos.symbol} 亏损${pnlPct.toFixed(1)}%`);
-          await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "stop_loss_new");
-          continue;
-        }
-      } else {
-        const atrVal = atrCache.get(pos.symbol) || 0.015;
-        // 通过 indicatorCache 获取行情名来判断趋势/震荡
-        const { indicatorCache } = await import("../state");
-        const ind = indicatorCache.get(pos.symbol);
-        const regimeName = ind?.regime || "unknown";
-        const isTrend = regimeName.includes("趋势") || regimeName === "unknown";
-        const atrMult = isTrend ? 4 : 2;
-        const slResult = checkStopLoss(pnlPct, peakPnl, pos.leverage || 5, atrVal, atrMult);
-        if (slResult?.shouldClose) {
-          logger.warn(`🛑 ${slResult.description} | ${pos.symbol}`);
-          await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, slResult.level);
-          continue;
-        }
-        // --- PnL% 硬顶: 亏损超 5% 强制平仓（数据库 max_stop_loss_pct 控制） ---
-        const maxSl = ((await import("../state")).interceptParamsCache.get("max_stop_loss_pct") ?? 500) / 100;
-        if (pnlPct <= -Math.max(2, maxSl)) {
-          logger.warn(`🛑 PnL硬止损: ${pos.symbol} 亏损${pnlPct.toFixed(1)}% 超${maxSl}%上限`);
-          await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "pnl_hard_stop");
-          clearTrailingStop(pos.symbol);
-          continue;
-        }
-        // --- 吊灯止损: 价格维度跟踪（只升不降/只降不升） ---
-        const price = Math.abs(pnlPct) > 0 && pos.entryPrice > 0
-          ? pos.side === "long"
-            ? pos.entryPrice * (1 + pnlPct / 100 / (pos.leverage || 1))
-            : pos.entryPrice * (1 - pnlPct / 100 / (pos.leverage || 1))
-          : 0;
-        if (price > 0) {
-          const atrAbs = getAtrAbs(pos.symbol, price);
-          updateTrailingStop(pos.symbol, price, atrAbs, pos.side, 3);
-          if (isChandelierTriggered(price, pos.side, pos.symbol)) {
-            logger.warn(`🛑 吊灯止损: ${pos.symbol} ${pos.side} 触发 | 现价$${price.toFixed(2)} 止损线$${(trailingStopPrice.get(pos.symbol)??0).toFixed(2)} ATR=$${atrAbs.toFixed(2)} pnl=${pnlPct.toFixed(2)}%`);
-            clearTrailingStop(pos.symbol);
-            await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "trailing_stop");
-            continue;
-          }
-        }
-      }
-
-      // --- #6 强平预警: 清算距离<2%时自动减仓30% ---
-      const liqPrice = pos.liquidationPrice || 0;
-      if (liqPrice > 0 && pos.entryPrice > 0) {
-        const liqDist = pos.side === "long"
-          ? Math.abs((pos.entryPrice - liqPrice) / pos.entryPrice) * 100
-          : Math.abs((liqPrice - pos.entryPrice) / pos.entryPrice) * 100;
-        if (liqDist < 2 && liqDist > 0) {
-          const reduceQty = Math.round(pos.qty * 0.3);
-          if (reduceQty > 0) {
-            logger.warn(`⚠️ 强平预警: ${pos.symbol} 清算距${liqDist.toFixed(1)}%<2%, 自动减仓${reduceQty}张(30%)`);
-            try {
-              await exchangeManager.closePosition(pos.symbol, pos.side, reduceQty);
-              recentlyClosed.add(pos.symbol);
-              setTimeout(() => recentlyClosed.delete(pos.symbol), 15000);
-            } catch (e: any) {
-              logger.error(`强平减仓失败 ${pos.symbol}: ${e.message}`);
-            }
-          }
-        }
-      }
-
-      // --- 2. 时间止损 (>4h 从未盈利, 亏损 ≥ -2%) ---
       const posAgeHours = openedAt ? (Date.now() - openedAt) / 3_600_000 : 0;
-      if (posAgeHours > 4 && pnlPct <= -2 && peakPnl <= 0) {
-        logger.warn(`⏰ 时间止损: ${pos.symbol} ${posAgeHours.toFixed(1)}h从未盈利`);
+
+      const price = pos.entryPrice > 0
+        ? (pos.side === "long"
+          ? pos.entryPrice * (1 + pnlPct / 100 / (pos.leverage || 1))
+          : pos.entryPrice * (1 - pnlPct / 100 / (pos.leverage || 1)))
+        : 0;
+
+      // 1. A-V2 止损
+      const stp = av2StopPrice.get(pos.symbol);
+      if (stp && price > 0) {
+        if ((pos.side === "long" && price <= stp) || (pos.side === "short" && price >= stp)) {
+          logger.warn(`🛑 A-V2止损: ${pos.symbol} $${price.toFixed(2)} < 止损$${stp.toFixed(2)}`);
+          await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "av2_stop");
+          clearTrailingStop(pos.symbol);
+          av2StopPrice.delete(pos.symbol); av2TpPrice.delete(pos.symbol); av2TrailingLine.delete(pos.symbol);
+          continue;
+        }
+        // 2. A-V2 止盈（固定盈亏比）
+        const tp = av2TpPrice.get(pos.symbol);
+        if (tp && ((pos.side === "long" && price >= tp) || (pos.side === "short" && price <= tp))) {
+          logger.warn(`✅ A-V2止盈: ${pos.symbol} $${price.toFixed(2)} > 止盈$${tp.toFixed(2)}`);
+          await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "av2_tp");
+          clearTrailingStop(pos.symbol);
+          av2StopPrice.delete(pos.symbol); av2TpPrice.delete(pos.symbol); av2TrailingLine.delete(pos.symbol);
+          continue;
+        }
+
+        // 3. A-V2 曲线跟踪止盈（仅在盈利时触发，防亏钱出场）
+        const trail = av2TrailingLine.get(pos.symbol);
+        if (pnlPct > 0 && trail && trail > 0 && ((pos.side === "long" && price < trail) || (pos.side === "short" && price > trail))) {
+          logger.warn(`📉 A-V2曲线止盈: ${pos.symbol} 价格$${price.toFixed(2)} 突破趋势线$${trail.toFixed(2)}`);
+          await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "av2_trail_tp");
+          clearTrailingStop(pos.symbol);
+          av2StopPrice.delete(pos.symbol); av2TpPrice.delete(pos.symbol); av2TrailingLine.delete(pos.symbol);
+          continue;
+        }
+
+        // 4. 右侧止盈：追踪峰值 PnL，回撤超过 70% 或回撤到亏损时平仓
+        const peakVal = peakPnlMap.get(pos.symbol) ?? 0;
+        if (pnlPct > peakVal) {
+          peakPnlMap.set(pos.symbol, pnlPct);
+          try {
+            const dbTrade = getLatestOpenTrades().get(pos.symbol);
+            if (dbTrade?.id) updatePeakPnlInDb(dbTrade.id, pnlPct);
+          } catch {}
+        }
+        if (peakVal >= 3 && pnlPct < Math.max(peakVal * 0.3, 0)) {
+          logger.warn(`⚠️ 右侧止盈: ${pos.symbol} 峰值${peakVal.toFixed(1)}%→当前${pnlPct.toFixed(1)}%`);
+          await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "av2_revert_tp");
+          clearTrailingStop(pos.symbol);
+          av2StopPrice.delete(pos.symbol); av2TpPrice.delete(pos.symbol); av2TrailingLine.delete(pos.symbol);
+          continue;
+        }
+      }
+
+      // 5. 时间止损 (>4h 从未盈利, 亏损 ≥ -2%)
+      if (posAgeHours > 4 && pnlPct <= -2) {
+        logger.warn(`⏰ 时间止损: ${pos.symbol} ${posAgeHours.toFixed(1)}h`);
         await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "time_stop");
         continue;
       }
-
-      // --- 3. 无盈利平仓 (>120min 从未过半盈, 当前亏损) ---
-      const posAgeMin = openedAt ? (Date.now() - openedAt) / 60_000 : 0;
-      if (posAgeMin > 120 && pnlPct < 0 && peakPnl < 0.5) {
-        logger.warn(`⏰ 无盈利平仓: ${pos.symbol} ${posAgeMin.toFixed(0)}分从未过半盈`);
-        await executeFullClose(pos.symbol, pos.side, pos.qty, 0, pnlPct, "no_profit_stop");
-      }
     }
   } catch (e: any) {
-    // 静默失败，下轮重试
+    _backoff = true;
+    logger.warn(`⚠️ getPositions 失败，暂停监控 30s: ${e?.message?.slice(0,60)}`);
+    setTimeout(() => _backoff = false, BACKOFF_MS);
   }
 }
 
 export function startStopLossMonitor() {
   if (_timer) return;
-  logger.info(`🛡️ 止损监控器已启动 (每 ${INTERVAL_MS / 1000}s)`);
+  logger.info(`🛡️ SuperFilter止损监控器 (每 ${INTERVAL_MS / 1000}s)`);
   tick();
   _timer = setInterval(tick, INTERVAL_MS);
 }
