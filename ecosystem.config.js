@@ -12,15 +12,15 @@ export default {
   apps: [
     {
       name: "smarttrade",
-      script: "dist/index.js",
+      script: "npx",
+      args: "tsx --env-file=.env src/index.ts",
       cwd: ".",
-      args: "",
       env: {
         NODE_ENV: "production",
       },
       env_web: {
         NODE_ENV: "production",
-        args: "--web",
+        args: "tsx --env-file=.env src/index.ts --web",
       },
       error_file: "data/logs/pm2-error.log",
       out_file: "data/logs/pm2-out.log",
