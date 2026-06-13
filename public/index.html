@@ -246,8 +246,7 @@ async function refresh(){
             const dirColor = t.action === "buy" ? "#3fb950" : "#f85149";
             const score = ai ? ai.score : 0;
             const emoji = score >= 70 ? "✅" : score >= 40 ? "⚠️" : "❌";
-            const pctText = res && res.status === "opened" ? "" : (score < 40 ? " ❌ 评分不足" : score < 70 ? " ⚠️ 半仓" : "");
-            html+=`<div style="font-size:16px;margin-left:8px;color:${dirColor}">${t.symbol}: ${actLabel} ${t.leverage}x — ${t.reason||""}${pctText}</div>`;
+            html+=`<div style="font-size:16px;margin-left:8px;color:${dirColor}">${t.symbol}: ${actLabel} ${t.leverage}x — ${t.reason||""}</div>`;
             if(ai) html+=`<div style="font-size:16px;margin-left:16px;color:#8b949e">  🤖 ${emoji} 评分${score} ${ai.reason||""}</div>`;
           }
         }

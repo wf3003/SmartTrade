@@ -43,12 +43,14 @@ export async function startServer(host?: string, port?: number) {
       if (now - cachedTickersAt < 15000 && Object.keys(cachedTickers).length > 0) {
         tickers = cachedTickers;
       } else {
+        const posSyms = new Set(positions.map(p => p.symbol));
+        const allSyms = [...new Set([...CONFIG.symbols, ...posSyms])];
         const tResults = await Promise.allSettled(
-          CONFIG.symbols.map(sym => exchangeManager.getTicker(sym).catch(() => null))
+          allSyms.map(sym => exchangeManager.getTicker(sym).catch(() => null))
         );
-        for (let i = 0; i < CONFIG.symbols.length; i++) {
+        for (let i = 0; i < allSyms.length; i++) {
           const t = (tResults[i] as any).value;
-          if (t) tickers[CONFIG.symbols[i]] = t.price;
+          if (t) tickers[allSyms[i]] = t.price;
         }
         cachedTickers = tickers;
         cachedTickersAt = now;
@@ -105,6 +107,17 @@ export async function startServer(host?: string, port?: number) {
 
   app.get("/api/decisions", (req, res) => {
     res.json(getDecisionsToday());
+  });
+
+  // DS信号记录（由ds脚本写入/tmp/ds_signals.json）
+  app.get("/api/ds-signals", (req, res) => {
+    try {
+      const fs = require("fs");
+      const data = fs.readFileSync("/tmp/ds_signals.json", "utf8");
+      res.json({ ok: true, data: JSON.parse(data) });
+    } catch {
+      res.json({ ok: true, data: { signals: [], updated: null } });
+    }
   });
 
   // 定时同步交易所订单（每 30 秒）

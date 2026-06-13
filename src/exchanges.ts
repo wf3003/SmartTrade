@@ -306,10 +306,10 @@ class ExchangeManager {
       const all = await this.clients.values().next().value?.fetchTickers();
       if (!all) return [];
       return Object.entries(all as Record<string, any>)
-        .filter(([sym, t]) => sym.endsWith("/USDT:USDT") && !exclude?.has(sym) && (t?.baseVolume || t?.quoteVolume || 0) > 0)
+        .filter(([sym, t]) => sym.endsWith("/USDT:USDT") && !exclude?.has(sym.replace(/:USDT/g, "")) && (t?.baseVolume || t?.quoteVolume || 0) > 0)
         .sort((a, b) => (b[1]?.quoteVolume || 0) - (a[1]?.quoteVolume || 0))
         .slice(0, count)
-        .map(([sym]) => sym);
+        .map(([sym]) => sym.replace(/:USDT/g, ""));
     } catch { return []; }
   }
 
@@ -393,8 +393,8 @@ class ExchangeManager {
                 totalEquity = parseFloat(detail.eq || detail.eqUsd || "0");
                 available = parseFloat(detail.availBal || "0");
                 marginUsed = parseFloat(detail.frozenBal || "0");
-                // isoUpl = 逐仓未实现盈亏, upl = 总未实现盈亏
-                unrealized = parseFloat(detail.isoUpl || detail.upl || "0");
+                // upl = 总未实现盈亏（优先）, isoUpl = 逐仓未实现盈亏
+                unrealized = parseFloat(detail.upl || detail.isoUpl || "0");
               }
             }
           }
@@ -566,8 +566,8 @@ class ExchangeManager {
     if (!found) throw new Error(`无可用的合约交易所: ${symbol}`);
     const { client, swapSymbol } = found;
     const orderSide = side === "long" ? "sell" : "buy";
-    const params: any = { reduceOnly: true, tdMode: "isolated" };
-    // 双向持仓模式需要 posSide，先不带试一次
+    const params: any = { reduceOnly: true };
+    // 不指定 tdMode，让 OKX 自动匹配逐仓/全仓；51000 时重试带上 posSide
     try {
       const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
       let avgPrice = order?.price || order?.average || 0;

@@ -803,33 +803,12 @@ async function aiDecisionCycle() {
         const cascade: string[] = [];
         const ck = (node: string, pass: boolean) => cascade.push(`${node}:${pass ? "✅" : "❌"}`);
 
-        // AI主席置信度：仅二元门控（历史显示置信度分数不预测盈亏，不再做仓位缩放）
+        // AI评分门控已关闭（SuperFilter 信号自带置信度过滤）
         const aiScore = (trade.confidence || 5) * 10;
-        if (!CONFIG.bypassQualityFilters && aiScore < 30) {
-          const aiRsn = trade.reason || "置信度不足";
-          const msg = `⏭️ ${trade.symbol} AI置信度${aiScore}<30，跳过 (${aiRsn})`;
-          tradeResults.push({ symbol: trade.symbol, status: "ai_rejected", reason: `AI置信度${aiScore}: ${aiRsn}` });
-          logger.info(msg);
-          execLog.push(msg);
-          continue;
-        }
 
         // 行情质量：从策略引擎获取
         const sa = null; /* strategyReport removed - SuperFilter handles filtering */
         const ticker = tickers.get(trade.symbol);
-
-        // ===== 硬性信号过滤：AI复盘反复验证的亏损规律，代码级阻断 =====
-
-        // ② AI评分<阈值直接跳
-        const aiScoreMin = aggrScale(getIntercept("ai_score_min", 45), 20);
-        ck(`AI(${aiScore})`, aiScore >= aiScoreMin);
-        if (!CONFIG.bypassQualityFilters && aiScore < aiScoreMin) {
-          const msg = `⏭️ ${trade.symbol} AI评分${aiScore}<${aiScoreMin}，质量不足跳过`;
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `AI评分不足` });
-          logger.info(msg + ` | cascade: ${cascade.join(" ")}`); execLog.push(msg);
-          try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
-          continue;
-        }
         const mq = 50;
         const mqMin = aggrScale(getIntercept("market_quality_min", 20), 10);
         ck(`MQ(${mq})`, mq >= mqMin);
@@ -922,7 +901,6 @@ async function aiDecisionCycle() {
         const aiRsn = trade.reason || "无AI分析";
         const aiSc = aiScore;
         const side = trade.action === "buy" ? "long" : "short";
-        const margin = Number(account.availableBalance) * trade.amountPercent / 100;
 
         const snap = {
           rsi: Math.round(rsiCache.get(trade.symbol) || 50),
@@ -1007,16 +985,36 @@ async function aiDecisionCycle() {
         if (!ticker || Number(ticker.price) <= 0) { updateDecisionStatus(decId, "failed"); continue; }
 
         const contractSize = exchangeManager.getContractSize(trade.symbol);
-        let qty = Math.max(1, Math.floor(margin * Number(trade.leverage) / (Number(ticker.price) * Number(contractSize))));
-        if (margin <= 0 || qty <= 0) {
-          logger.warn(`⚠️ 保证金不足: 可用$${Number(account.availableBalance).toFixed(2)}`);
-          updateDecisionStatus(decId, "failed");
-          continue;
+        // 从 20% 开始逐步降仓位重试，直至成功或完全不够
+        const pctSteps = [20, 15, 10, 5, 3, 2, 1];
+        let opened = false;
+        let fillPrice = 0;
+        let lastError = "";
+        let usedQty = 0;
+        let usedPct = 0;
+
+        for (const attemptPct of pctSteps) {
+          const attemptMargin = Number(account.totalEquity) * attemptPct / 100;
+          const attemptQty = Math.max(1, Math.floor(attemptMargin * Number(trade.leverage) / (Number(ticker.price) * Number(contractSize))));
+          if (attemptQty <= 0) continue;
+
+          const result = await executeFullOpen(trade.symbol, side, attemptQty, Number(trade.leverage), Number(ticker.price), trade.reason, Number(decId));
+          if (result.success) {
+            opened = true;
+            fillPrice = result.fillPrice;
+            usedQty = attemptQty;
+            usedPct = attemptPct;
+            trade.amountPercent = attemptPct;
+            break;
+          }
+          lastError = result.error || "未知";
+          // 交易所单笔上限错误（小币种），降比例也没用，直接放弃
+          if (lastError.includes("exceeds the maximum")) break;
+          if (attemptQty <= 1) break;
         }
 
-        const { success, fillPrice, error } = await executeFullOpen(trade.symbol, side, qty, Number(trade.leverage), Number(ticker.price), trade.reason, Number(decId));
-        if (success) {
-          tradeResults.push({ symbol: trade.symbol, status: "opened", side, qty, price: fillPrice, leverage: trade.leverage });
+        if (opened) {
+          tradeResults.push({ symbol: trade.symbol, status: "opened", side, qty: usedQty, price: fillPrice, leverage: trade.leverage });
           existingSymbols.add(trade.symbol);
           openedThisSession.add(trade.symbol);
           openedThisCycle++;
@@ -1032,7 +1030,8 @@ async function aiDecisionCycle() {
           // 逐笔延迟，避免 demo 环境瞬时并发触发限频
           await new Promise(r => setTimeout(r, 1500));
         } else {
-          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `开仓失败: ${error || "未知"}` });
+          logger.warn(`⚠️ ${trade.symbol} 各比例均开仓失败: ${lastError}`);
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `开仓失败: ${lastError || "未知"}` });
         }
       }
     }

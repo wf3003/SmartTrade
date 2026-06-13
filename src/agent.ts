@@ -57,29 +57,8 @@ export function signalToTrade(
   currentRegime: string,
 ): { leverage: number; amountPercent: number } | null {
   if (signal.action === "hold") return null;
-  const regime = currentRegime || "";
-  // 强趋势禁逆势（多<->空对称）：历史数据显示逆势方向胜率 23%，亏损 -$170
-  if (signal.action === "buy" && regime.includes("强趋势空")) return null;
-  if (signal.action === "sell" && regime.includes("强趋势多")) return null;
-  const isCounterTrend = (
-    (signal.action === "buy" && (regime.includes("空") || regime.includes("bear"))) ||
-    (signal.action === "sell" && (regime.includes("多") || regime.includes("bull")))
-  );
-  if (signal.riskFlag && signal.riskFlag.length > 3) return null;
-  const c = signal.confidence;
-  if (c < 4) return null;
-  let baseLev: number, basePct: number;
-  if (c >= 9)      { baseLev = 10; basePct = 100; }
-  else if (c >= 7) { baseLev = 8;  basePct = 75;  }
-  else if (c >= 5) { baseLev = 6;  basePct = 50;  }
-  else             { baseLev = 4;  basePct = 30;  }
-  if (isCounterTrend) {
-    baseLev = Math.max(2, Math.floor(baseLev * 0.5));
-    basePct = Math.round(basePct * 0.4);
-  }
-  const amountPercent = Math.max(2, Math.min(CONFIG.basePositionPct, Math.round(basePct * CONFIG.basePositionPct / 100)));
-  const leverage = Math.min(CONFIG.maxLeverage, Math.max(1, baseLev));
-  return { leverage, amountPercent };
+  // 固定 10x 杠杆 + 20% 总资金（通过仓位比例控制），不再按置信度动态调整
+  return { leverage: 10, amountPercent: 20 };
 }
 
 export function buildStrategyPrompt(

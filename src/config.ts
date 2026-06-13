@@ -69,7 +69,7 @@ export const CONFIG = {
   dailyLossLimitUsdt: envNum("DAILY_LOSS_LIMIT_USDT", 200),
 
   // 服务器
-  port: envNum("PORT", 3101),
+  port: envNum("PORT", 3100),
   host: envStr("HOST", "0.0.0.0"),
 
   // 数据库
