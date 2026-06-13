@@ -7,6 +7,7 @@
  *   - 内部使用: BTC/USDT:USDT（OKX/Gate 合约符号）
  */
 import ccxt, { type Exchange as CCXTExchange } from "ccxt";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { CONFIG } from "./config";
 import { logger } from "./logger";
 
@@ -47,7 +48,16 @@ class ExchangeManager {
   private clients: Map<string, CCXTExchange> = new Map();
   private initialized = false;
 
-  private initFailed = false; // #3 防无限循环
+  private initFailed = false;
+  private _binanceClient: any = null;
+  private getBinanceClient(): any {
+    if (!this._binanceClient) {
+      const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://127.0.0.1:7890";
+      const agent = new (HttpsProxyAgent as any)(proxyUrl);
+      this._binanceClient = new (ccxt as any).binance({ timeout: 15000, agent });
+    }
+    return this._binanceClient;
+  } // #3 防无限循环
   get isDegraded(): boolean { return this.clients.size < CONFIG.exchanges.length; }
   async init() {
     if (this.initialized) return;
@@ -249,6 +259,59 @@ class ExchangeManager {
     return this.getSuperFilterData(symbol, 50, "4h");
   }
 
+
+  /**
+   * 从币安公开API获取K线数据（无需API Key, 数据质量远优于模拟盘）
+   */
+  async getBinanceOHLCV(symbol: string, timeframe: string, limit: number): Promise<{ opens: number[]; highs: number[]; lows: number[]; closes: number[]; volumes: number[] } | null> {
+    try {
+      // 延迟导入避免顶层依赖
+      const binance = this.getBinanceClient();
+      // 币安符号格式: BTC/USDT → BTCUSDT, ETH/USDT → ETHUSDT
+      const base = symbol.replace("/USDT:USDT","").replace("/USDT","").replace(":USDT","");
+      const binanceSymbol = base + "/USDT";
+      const raw = await (binance as any).fetchOHLCV(binanceSymbol, timeframe, undefined, limit);
+      if (!raw || !raw.length) return null;
+      return {
+        opens: raw.map((c: any) => c[1]),
+        highs: raw.map((c: any) => c[2]),
+        lows: raw.map((c: any) => c[3]),
+        closes: raw.map((c: any) => c[4]),
+        volumes: raw.map((c: any) => c[5]),
+      };
+    } catch (e: any) { console.error(`[binance] OHLCV fetch error: ${e?.message}`); return null; }
+  }
+
+  /**
+   * 从币安获取成交量前N的USDT币种（无API限制,走代理）
+   */
+  async getBinanceTopSymbols(count: number, exclude?: Set<string>): Promise<string[]> {
+    try {
+      const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://127.0.0.1:7890";
+      const binance = new ccxt.binance({ timeout: 15000, proxies: { https: proxy, http: proxy } });
+      const tickers = await binance.fetchTickers();
+      return Object.entries(tickers as Record<string, any>)
+        .filter(([sym, t]) => sym.endsWith("/USDT") && !exclude?.has(sym) && (t.quoteVolume || 0) > 1e6 && !["USDC","USD1","USDT","BUSD","TUSD","USDP","USDD"].includes(sym.split("/")[0]))
+        .sort((a, b) => (b[1]?.quoteVolume || 0) - (a[1]?.quoteVolume || 0))
+        .slice(0, count)
+        .map(([sym]) => sym);
+    } catch { return []; }
+  }
+
+  /**
+   * 获取按24h成交量排序的USDT合约符号（动态选币）
+   */
+  async getTopVolumeSymbols(count: number, exclude?: Set<string>): Promise<string[]> {
+    try {
+      const all = await this.clients.values().next().value?.fetchTickers();
+      if (!all) return [];
+      return Object.entries(all as Record<string, any>)
+        .filter(([sym, t]) => sym.endsWith("/USDT:USDT") && !exclude?.has(sym) && (t?.baseVolume || t?.quoteVolume || 0) > 0)
+        .sort((a, b) => (b[1]?.quoteVolume || 0) - (a[1]?.quoteVolume || 0))
+        .slice(0, count)
+        .map(([sym]) => sym);
+    } catch { return []; }
+  }
 
   /**
    * 获取多时间框架 OHLCV 数据（用于 AI 分析）

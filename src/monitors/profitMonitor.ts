@@ -9,7 +9,7 @@
 import { logger } from "../logger";
 import { exchangeManager } from "../exchanges";
 import { atrCache } from "../state";
-import { checkProfitProtect } from "../risk";
+// import { null } from "../risk";
 import { recentlyClosed, recentlyOpened, updatePeak, getPeak } from "./shared";
 import { executeFullClose } from "../close-executor";
 
@@ -41,7 +41,7 @@ async function tick() {
       // --- 2. 浮盈保护 ---
       const posAtr = (atrCache.get(symbol) || 0.015) * 100;
       const posLev = pos.leverage || 1;
-      const protect = checkProfitProtect(peakPnl, pnlPct, posAtr, posLev);
+      const protect: any = undefined; // checkProfitProtect removed
       if (protect?.shouldClose) {
         logger.warn(`🔒 ${protect.reason} | ${symbol}`);
         await executeFullClose(symbol, pos.side, pos.qty, 0, pnlPct, "profit_protect");

@@ -110,7 +110,7 @@ export async function aiSignalDecision(
                 price < lastSma5 && lastSma5 < lastSma20 && lastSma20 < lastSma50 ? "下跌" : "震荡";
 
   const prompt = [
-    "分析 " + symbol + " 15m 行情，判断入场机会",
+    "分析 " + symbol + " 15m 行情，给出交易信号",
     "",
     "K线最后5根:",
     last5,
@@ -121,14 +121,20 @@ export async function aiSignalDecision(
     "SMA50: $" + lastSma50.toFixed(0) + "(" + (price > lastSma50 ? "上" : "下") + ")",
     "趋势: " + trend,
     "RSI(14): " + lastRsi.toFixed(1),
-    "MACD: " + (lastMacd > lastMacdSignal ? "多头(金叉)" : "空头(死叉)"),
+    "MACD: " + (lastMacd > lastMacdSignal ? "多头金叉" : "空头死叉"),
     "BB位置: " + (bbPos * 100).toFixed(0) + "%",
     "量比: " + volRatio.toFixed(2) + "x",
-    "资金费率: " + (fundingRate * 100).toFixed(3) + "%",
+    "费率: " + (fundingRate * 100).toFixed(3) + "%",
     "",
-    "规则: 趋势明确做方向/RSI>70不追多<30不追空/量比>1.5可信/费率>0.05%不追多<-0.05%不追空",
+    "交易指导:",
+    "1.趋势跟随: 明确趋势出现时立即行动,不要过度等待",
+    "2.信号明确: 强势上涨→BUY 强势下跌→SELL 窄幅震荡无方向→HOLD",
+    "3.指标权重: 趋势(均线排列)>RSI>MACD>布林带>量比",
+    "4.RSI>70有回调风险但不绝对禁多,RSI<30有反弹可能但不绝对禁空",
+    "5.量比极低(<0.2)时降低信心但不绝对禁开",
+    "6.费率极端(>0.05%或<-0.05%)时提高警惕",
     "",
-    "输出JSON（reason写具体技术依据，无方向也要写原因）:",
+    "只输出JSON:",
     '{"signal":"BUY|SELL|HOLD","reason":"...","stopLoss":数字,"takeProfit":数字,"confidence":"HIGH|MEDIUM|LOW"}',
   ].join("\n");
 
@@ -136,7 +142,7 @@ export async function aiSignalDecision(
     const resp = await openai.chat.completions.create({
       model: CONFIG.ai.model as string,
       messages: [
-        { role: "system", content: "你是加密货币短线交易分析师。根据用户提供的行情数据和规则，输出严格JSON：{\"signal\":\"BUY|SELL|HOLD\",\"reason\":\"...\",\"stopLoss\":数字,\"takeProfit\":数字,\"confidence\":\"HIGH|MEDIUM|LOW\"}" },
+        { role: "system", content: "你是加密货币短线交易员。根据行情数据果断判断，趋势明确时立即行动。只输出JSON：{\"signal\":\"BUY|SELL|HOLD\",\"reason\":\"...\",\"stopLoss\":数字,\"takeProfit\":数字,\"confidence\":\"HIGH|MEDIUM|LOW\"}" },
         { role: "user", content: prompt },
       ],
       temperature: 0.2,

@@ -46,6 +46,9 @@ import { startAllMonitors, stopAllMonitors } from "./monitors/index";
 import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened, av2StopPrice, av2TpPrice, av2TrailingLine } from "./monitors/shared";
 import { executeFullClose, directionLoss, snapshotIdMap, openedThisSession, setAiCycleNumber, aiCycleNumber, DIRECTION_BLOCK_CYCLES } from "./close-executor";
 
+// AI信号的止损止盈价（每2秒监控检查）
+// AI止损价（在av2StopPrice中存储, 由监控循环每2秒检查）
+
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓（模拟盘限频宽松，高频捕捉峰值）
 const DECISION_INTERVAL = 15 * 60_000; // 每 15 分钟（匹配15mK线）
 const MINIMUM_ACCOUNT_STOP_USDT = CONFIG.accountStopLossUsdt;
@@ -209,13 +212,17 @@ async function executeFullOpen(
     recentlyOpened.add(symbol);
     setTimeout(() => recentlyOpened.delete(symbol), 15000);
 
-    // 验证持仓：等1.5秒让交易所结算后确认确实有持仓
-    await new Promise(r => setTimeout(r, 1500));
-    const allPos = await exchangeManager.getPositions();
-    const confirmed = allPos?.find((p: any) => p.symbol === symbol && p.side === side);
+    // 验证持仓：等3秒后重试最多3次
+    let confirmed: any = null;
+    for (let retry = 0; retry < 3; retry++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const allPos = await exchangeManager.getPositions();
+      confirmed = allPos?.find((p: any) => p.symbol === symbol && p.side === side);
+      if (confirmed) break;
+    }
     if (!confirmed) {
       updateDecisionStatus(decId, "failed");
-      logger.warn(`⚠️ 开仓未确认: ${symbol} ${side} ${qty}张 — 交易所无对应持仓`);
+      logger.warn(`⚠️ 开仓未确认: ${symbol} ${side} ${qty}张 — 3次重试后仍无持仓`);
       return { success: false, fillPrice: 0, error: "交易所未确认持仓" };
     }
 
@@ -226,14 +233,6 @@ async function executeFullOpen(
     const existingTrade = db.prepare(
       "SELECT id, entry_qty, entry_price, leverage FROM trades WHERE symbol=? AND side=? AND status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1"
     ).get(symbol, side) as any;
-
-    // 设置 AI 止损止盈单
-    if (sl || tp) {
-      try {
-        if (sl) exchangeManager.openPosition(symbol, side === "long" ? "sell" : "buy", 0, leverage, { reduceOnly: true, triggerPrice: sl, triggerType: "last" }).catch(() => {});
-        if (tp) exchangeManager.openPosition(symbol, side === "long" ? "sell" : "buy", 0, leverage, { reduceOnly: true, triggerPrice: tp, triggerType: "last" }).catch(() => {});
-      } catch {}
-    }
 
     if (existingTrade) {
       const safeLev = Math.min(leverage, existingTrade.leverage || leverage);
@@ -396,12 +395,11 @@ async function main() {
     }
   })();
 
-  // AI 决策循环
-  // 对齐到下一个15分钟整点后5秒启动(确保K线已完整收盘)
+  // AI 决策循环 — 对齐整点
   const _d=new Date();const _nq=Math.ceil((_d.getMinutes()+1)/15)*15;
-  const _msToAlign=Math.max(3000,(_nq-_d.getMinutes())*60000-_d.getSeconds()*1000+5000);
-  logger.info(`⏰ 首次AI决策将同步至整点后(`+(Math.round(_msToAlign/1000))+"s后)");
-  await new Promise(r => setTimeout(r, _msToAlign));
+  const _ms=Math.max(3000,(_nq-_d.getMinutes())*60000-_d.getSeconds()*1000+5000);
+  logger.info("AI首次决策同步至"+String(_nq).padStart(2,"0")+":05 ("+Math.round(_ms/1000)+"s后)");
+  await new Promise(r => setTimeout(r, _ms));
   (async function decisionLoop() {
     let nextRunAt = Date.now();
     while (true) {
@@ -409,7 +407,7 @@ async function main() {
       try {
         await Promise.race([
           aiDecisionCycle(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("决策超时")), 4 * 60_000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("决策超时")), 8 * 60_000)),
         ]).catch(() => logger.warn("⏰ 决策周期超时，跳过本轮"));
       } catch {}
       const delay = Math.max(0, nextRunAt - Date.now());
@@ -541,9 +539,7 @@ let lastSnapshotTime = 0;
 async function aiDecisionCycle() {
   setAiCycleNumber(aiCycleNumber + 1);
   try {
-    // 1. 市场数据
-    const tickers = await exchangeManager.getTickers(CONFIG.symbols);
-    if (tickers.size === 0) { logger.warn("无市场数据"); return; }
+    // 1. 持仓 & 账户
     logger.info(`===== AI 决策周期 #${aiCycleNumber} =====`);
 
 
@@ -558,20 +554,56 @@ async function aiDecisionCycle() {
       logger.warn(`⚠️ 账户风控: ${risk.reason}，不开新仓`);
     }
 
-    // 4. AI 全币种报告
-    const recentDecs = getDecisionsToday();
+    // 动态选币: 成交量前20 + 已持仓
+    const heldSymbols = new Set(positions.map(p => p.symbol));
+    const top20 = await exchangeManager.getTopVolumeSymbols(20, heldSymbols);
+    const symbols = [...new Set([...heldSymbols, ...top20])];
+
+    // 1. 市场数据
+    const tickers = await exchangeManager.getTickers(symbols);
     
-    // 获取多时间框架数据
+    // OKX K线数据
     const ohlcvData = new Map<string, Record<string, any[]>>();
-    for (const sym of CONFIG.symbols) { // 全币种取K线 (ccxt enableRateLimit 自动控速)
+    for (const sym of symbols) {
       try {
         const tfData = await exchangeManager.getMultiTimeframeData(sym);
         if (Object.keys(tfData).length > 0) ohlcvData.set(sym, tfData);
       } catch {}
     }
-    logger.info(`📡 K线:${ohlcvData.size}/${CONFIG.symbols.length}币种 行情:${tickers.size}/${CONFIG.symbols.length}币种`);
+    logger.info(`📡 K线:${ohlcvData.size}/${symbols.length}币种 行情:${tickers.size}/${symbols.length}币种`);
     
     // A-V2 指标更新由独立高频循环（每 30 秒）负责，AI 决策周期只生成信号
+
+    // === AI止损止盈检查 ===
+    for (const pos of positions) {
+      const aiSl = av2StopPrice.get(pos.symbol);
+      const price = pos.entryPrice > 0 ? (pos.side === "long"
+        ? pos.entryPrice * (1 + (pos.unrealizedPnlPct || 0) / 100 / (pos.leverage || 1))
+        : pos.entryPrice * (1 - (pos.unrealizedPnlPct || 0) / 100 / (pos.leverage || 1))) : 0;
+      if (aiSl && price > 0) {
+        if ((pos.side === "long" && price <= aiSl) || (pos.side === "short" && price >= aiSl)) {
+          logger.warn(`📉 AI止损: ${pos.symbol} $${price.toFixed(2)} ≤ $${aiSl.toFixed(2)}`);
+          try { await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_sl");
+            av2StopPrice.delete(pos.symbol); av2TpPrice.delete(pos.symbol); } catch {}
+          continue;
+        }
+      }
+      // 右侧止盈：峰值 >5% 后回撤5% 即平
+      const peakVal = peakPnlMap.get(pos.symbol) ?? 0;
+      if ((pos.unrealizedPnlPct || 0) > peakVal) {
+        peakPnlMap.set(pos.symbol, pos.unrealizedPnlPct || 0);
+        try {
+          const dbTrade = getLatestOpenTrades().get(pos.symbol);
+          if (dbTrade?.id) updatePeakPnlInDb(dbTrade.id, pos.unrealizedPnlPct || 0);
+        } catch {}
+      }
+      if (peakVal >= 5 && (pos.unrealizedPnlPct || 0) < peakVal - 5 && pos.side) {
+        logger.warn(`📈 右侧止盈: ${pos.symbol} 峰值${peakVal.toFixed(1)}%→${(pos.unrealizedPnlPct||0).toFixed(1)}%`);
+        try { await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "peak_tp");
+          av2StopPrice.delete(pos.symbol); av2TpPrice.delete(pos.symbol); } catch {}
+        continue;
+      }
+    }
 
     // === 闪崩保护检查 ===
     for (const pos of positions) {
@@ -584,7 +616,23 @@ async function aiDecisionCycle() {
 
     // === AI 自驱信号 ===
     const sfSignals: any[] = [];
-    for (const sym of CONFIG.symbols) {
+    // 过滤死币: 价格>0且有波动的才分析
+    const liveSyms: string[] = [];
+    for (const sym of symbols) {
+      const ohlcv = ohlcvData.get(sym);
+      if (!ohlcv) continue;
+      const tf15 = ohlcv["15m"];
+      if (!tf15 || tf15.length < 10) continue;
+      const prices = tf15.map((c: any) => c.close ?? c[4]);
+      const last = prices[prices.length - 1];
+      if (!last || last <= 0) continue;                  // 价格=0 跳过
+      const unique = new Set(prices.slice(-10));
+      if (unique.size <= 1) continue;                    // 10根K线价格都一样=死币
+      liveSyms.push(sym);
+    }
+    logger.info(`  有效币种: ${liveSyms.length}/${symbols.length} (过滤${symbols.length - liveSyms.length}个死币)`);
+    
+    for (const sym of liveSyms) {
       try {
         const ohlcv = ohlcvData.get(sym);
         if (!ohlcv) continue;
@@ -610,19 +658,7 @@ async function aiDecisionCycle() {
       } catch (e: any) { logger.error(`  ❌ ${sym} AI决策异常: ${e.message}`); }
     }
 
-    // === 4h A-V2 方向确认（仅检查方向一致，不要求完整信号） ===
-    for (let i = sfSignals.length - 1; i >= 0; i--) {
-      const sym = sfSignals[i].symbol;
-      try {
-        const d4 = await exchangeManager.getSuperFilterData4h(sym);
-        if (!d4 || d4.closes.length < 50) continue;
-        const av4 = aV2(d4.opens, d4.highs, d4.lows, d4.closes, 52);
-        const av4Up = av4.trend[av4.trend.length - 1] > 0;
-        if ((sfSignals[i].action === "buy" && !av4Up) || (sfSignals[i].action === "sell" && av4Up)) {
-          logger.info(`  4h方向不符: ${sym}, 移除`); sfSignals.splice(i, 1);
-        }
-      } catch { sfSignals.splice(i, 1); }
-    }
+
 
     const report: any = {
       analysis: [],
@@ -978,9 +1014,7 @@ async function aiDecisionCycle() {
           continue;
         }
 
-        const sl = trade.sf_stopLoss || 0;
-        const tp = trade.sf_takeProfit || 0;
-        const { success, fillPrice, error } = await executeFullOpen(trade.symbol, side, qty, Number(trade.leverage), Number(ticker.price), trade.reason, Number(decId), sl, tp);
+        const { success, fillPrice, error } = await executeFullOpen(trade.symbol, side, qty, Number(trade.leverage), Number(ticker.price), trade.reason, Number(decId));
         if (success) {
           tradeResults.push({ symbol: trade.symbol, status: "opened", side, qty, price: fillPrice, leverage: trade.leverage });
           existingSymbols.add(trade.symbol);
