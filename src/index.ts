@@ -9,9 +9,11 @@
 import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
+import { superFilter, aV2 } from "./indicators/superfilter";
+import { aiSignalDecision } from "./strategies/ai-driven";
 import { runStrategyEngine } from "./strategies/index";
 import { getMarketReport, signalToTrade } from "./agent";
-import { checkAccountRisk, checkStopLoss, checkProfitProtect, executeStopLoss, getCurrentPrice, calcPnlPct, updatePeakEquity } from "./risk";
+import { checkAccountRisk, updatePeakEquity } from "./risk";
 import { startServer, newCycle } from "./server";
 import { setLatestReport, atrCache, rsiCache, indicatorCache, setCacheData, cachedPositions, applyReviewSuggestions, applySymbolAnalysis, applyBlockSignals, applyBlockSymbols, resetDynamicParams, loadFeedbackFromDb, saveFeedbackToDb, ensureHardPenalties, symbolPositionMult, applyWinRateReward, applyOptRules, getPositionRuleMultiplier, optRulesCache, loadOptRulesFromDb, interceptParamsCache, loadInterceptParamsFromDb, autoAdjustAggressiveness } from "./state";
 import { aiDirectionCheck, type AiCheckResult, type AiOpinion, type AiPositionSuggestion } from "./ai-check";
@@ -41,11 +43,11 @@ import {
 } from "./db";
 import { runOptimizer, evaluateUnjudgedDecisions, discoverComboPatterns, detectRuleDrift, detectRegimeShift } from "./auto-optimizer";
 import { startAllMonitors, stopAllMonitors } from "./monitors/index";
-import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened } from "./monitors/shared";
+import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened, av2StopPrice, av2TpPrice, av2TrailingLine } from "./monitors/shared";
 import { executeFullClose, directionLoss, snapshotIdMap, openedThisSession, setAiCycleNumber, aiCycleNumber, DIRECTION_BLOCK_CYCLES } from "./close-executor";
 
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓（模拟盘限频宽松，高频捕捉峰值）
-const DECISION_INTERVAL = 5 * 60_000; // 每 5 分钟策略决策
+const DECISION_INTERVAL = 15 * 60_000; // 每 15 分钟（匹配15mK线）
 const MINIMUM_ACCOUNT_STOP_USDT = CONFIG.accountStopLossUsdt;
 
 // 记录每个持仓的峰值盈利（用于移动止盈）
@@ -177,6 +179,8 @@ async function executeFullOpen(
   tickerPrice: number,
   reason: string,
   decId: number,
+  sl?: number,
+  tp?: number,
 ): Promise<{ success: boolean; fillPrice: number; error?: string }> {
   try {
     // 方向翻转处理：先平掉反方向的持仓，再开新仓
@@ -186,7 +190,7 @@ async function executeFullOpen(
     if (oppPos && oppPos.qty > 0) {
       logger.warn(`🔄 ${symbol} 方向翻转: 先平${oppPos.qty}张${oppSide}仓`);
       try {
-        await exchangeManager.closePosition(symbol, oppSide, oppPos.qty);
+        await executeFullClose(symbol, oppSide, oppPos.qty, oppPos.unrealizedPnl || 0, oppPos.unrealizedPnlPct || 0, "flip_close");
         // 平仓后等交易所结算
         await new Promise(r => setTimeout(r, 1000));
       } catch (e: any) {
@@ -223,6 +227,14 @@ async function executeFullOpen(
       "SELECT id, entry_qty, entry_price, leverage FROM trades WHERE symbol=? AND side=? AND status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1"
     ).get(symbol, side) as any;
 
+    // 设置 AI 止损止盈单
+    if (sl || tp) {
+      try {
+        if (sl) exchangeManager.openPosition(symbol, side === "long" ? "sell" : "buy", 0, leverage, { reduceOnly: true, triggerPrice: sl, triggerType: "last" }).catch(() => {});
+        if (tp) exchangeManager.openPosition(symbol, side === "long" ? "sell" : "buy", 0, leverage, { reduceOnly: true, triggerPrice: tp, triggerType: "last" }).catch(() => {});
+      } catch {}
+    }
+
     if (existingTrade) {
       const safeLev = Math.min(leverage, existingTrade.leverage || leverage);
       const mainContractSize = exchangeManager.getContractSize(symbol);
@@ -245,6 +257,11 @@ async function executeFullOpen(
       notional, margin: notional / leverage,
       entry_fee: openResult.fee || 0,
     });
+    // 记录交易所确认的实际杠杆
+    const confirmedLev = confirmed?.leverage ?? leverage;
+    if (confirmedLev !== leverage) {
+      logger.warn(`⚠️ 杠杆差异: 意图${leverage}x → 实际${confirmedLev}x (notional=${notional}, 保证金=${notional / leverage})`);
+    }
     logger.warn(`✅ 开仓: ${symbol} ${side} ${qty}张 @$${fillPrice} ${leverage}x`);
     return { success: true, fillPrice };
   } catch (e: any) {
@@ -299,8 +316,8 @@ async function main() {
     logger.info(`📋 恢复峰值: ${symbol} peakPnl=${data.peakPnl.toFixed(1)}%`);
   }
 
-  // 启动独立监控器（止损、止盈、DB同步各自独立运行）
-  startAllMonitors();
+  // AI自驱模式下关闭旧SuperFilter止损监控器（止损由AI信号决定）
+  // startAllMonitors(); 已禁用
   // DB 同步循环（补建/关闭/修复记录）
   (async function syncLoop() {
     while (true) {
@@ -309,9 +326,82 @@ async function main() {
     }
   })();
 
+  // A-V2 指标更新循环（每 30 秒，独立于 AI 决策周期，让止损止盈反应更快）
+  (async function av2UpdateLoop() {
+    // 等交易所连接稳定
+    await new Promise(r => setTimeout(r, 3000));
+    const AV2_UPDATE_INTERVAL = 30_000;
+    while (true) {
+      try {
+        const positions = await exchangeManager.getPositions();
+        if (positions.length > 0) {
+          for (const pos of positions) {
+            const sym = pos.symbol;
+            try {
+              const sfData = await exchangeManager.getSuperFilterData(sym, 60);
+              if (!sfData || sfData.closes.length < 50) continue;
+              const last = sfData.closes.length - 1;
+              const av = aV2(sfData.opens, sfData.highs, sfData.lows, sfData.closes);
+              if (isNaN(av.maLow[last]) || isNaN(av.maHigh[last])) continue;
+
+              // 初始化缺失的止损价（进程重启后恢复用）
+              if (!av2StopPrice.has(sym) && pos.entryPrice > 0) {
+                if (pos.side === "long") {
+                  av2StopPrice.set(sym, av.maLow[last]);
+                  av2TpPrice.set(sym, av.maLow[last] + 2 * (pos.entryPrice - av.maLow[last]));
+                  av2TrailingLine.set(sym, av.maClose[last]);
+                } else {
+                  av2StopPrice.set(sym, av.maHigh[last]);
+                  av2TpPrice.set(sym, av.maHigh[last] - 2 * (av.maHigh[last] - pos.entryPrice));
+                  av2TrailingLine.set(sym, av.maClose[last]);
+                }
+                continue;
+              }
+
+              // 止损只往有利方向移动
+              if (pos.side === "long") {
+                const newStop = av.maLow[last];
+                const oldStop = av2StopPrice.get(sym);
+                if (oldStop !== undefined && newStop > oldStop) av2StopPrice.set(sym, newStop);
+
+                const newClose = av.maClose[last];
+                const oldTrail = av2TrailingLine.get(sym);
+                if (oldTrail !== undefined && newClose > oldTrail) av2TrailingLine.set(sym, newClose);
+
+                const oldTp = av2TpPrice.get(sym);
+                if (oldTp !== undefined) {
+                  const newTp = av2StopPrice.get(sym)! + (newClose - av.maLow[last]) * 2;
+                  if (newTp > oldTp) av2TpPrice.set(sym, newTp);
+                }
+              } else {
+                const newStop = av.maHigh[last];
+                const oldStop = av2StopPrice.get(sym);
+                if (oldStop !== undefined && newStop < oldStop) av2StopPrice.set(sym, newStop);
+
+                const newClose = av.maClose[last];
+                const oldTrail = av2TrailingLine.get(sym);
+                if (oldTrail !== undefined && newClose < oldTrail) av2TrailingLine.set(sym, newClose);
+
+                const oldTp = av2TpPrice.get(sym);
+                if (oldTp !== undefined) {
+                  const newTp = av2StopPrice.get(sym)! - 2 * (av.maHigh[last] - newClose);
+                  if (newTp < oldTp) av2TpPrice.set(sym, newTp);
+                }
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+      await new Promise(r => setTimeout(r, AV2_UPDATE_INTERVAL));
+    }
+  })();
+
   // AI 决策循环
-  logger.info(`🤖 AI 决策循环已启动 (每 ${DECISION_INTERVAL / 1000 / 60} 分钟)`);
-  await new Promise(r => setTimeout(r, 3000));  // 等交易所连接稳定
+  // 对齐到下一个15分钟整点后5秒启动(确保K线已完整收盘)
+  const _d=new Date();const _nq=Math.ceil((_d.getMinutes()+1)/15)*15;
+  const _msToAlign=Math.max(3000,(_nq-_d.getMinutes())*60000-_d.getSeconds()*1000+5000);
+  logger.info(`⏰ 首次AI决策将同步至整点后(`+(Math.round(_msToAlign/1000))+"s后)");
+  await new Promise(r => setTimeout(r, _msToAlign));
   (async function decisionLoop() {
     let nextRunAt = Date.now();
     while (true) {
@@ -353,9 +443,18 @@ async function syncPositionsWithDb() {
       return;
     }
 
-    // 检查账户止盈
+    // 检查账户止盈（触发时平掉所有持仓）
     if (account.totalEquity >= CONFIG.accountTakeProfitUsdt) {
       logger.warn(`🎯 账户止盈触发: 权益 $${account.totalEquity.toFixed(2)} ≥ $${CONFIG.accountTakeProfitUsdt}`);
+      logger.warn(`   正在平掉所有 ${positions.length} 个持仓...`);
+      for (const p of positions) {
+        try {
+          await executeFullClose(p.symbol, p.side, p.qty, p.unrealizedPnl || 0, p.unrealizedPnlPct || 0, "account_tp");
+          logger.warn(`  ✅ 已平仓: ${p.symbol}`);
+        } catch (e: any) {
+          logger.error(`  平仓失败 ${p.symbol}: ${e.message}`);
+        }
+      }
       return;
     }
 
@@ -472,55 +571,85 @@ async function aiDecisionCycle() {
     }
     logger.info(`📡 K线:${ohlcvData.size}/${CONFIG.symbols.length}币种 行情:${tickers.size}/${CONFIG.symbols.length}币种`);
     
-    // === 策略引擎: 三个独立策略分析 ===
-    const strategyReport = await runStrategyEngine(tickers, ohlcvData, positions, account);
-    logger.info(`📡 策略引擎: ${strategyReport.analyses.length}币种 | ${strategyReport.summary}`);
-    // 策略引擎已填充 indicatorCache，更新当前行情名
-    currentRegimeName = getOverallRegime();
-    logger.info(`📊 当前行情: ${currentRegimeName}`);
-    
-    // === SA-Trend 立即推网页（不等 AI） ===
-    const directSigs = ((strategyReport as any).directSignals || []) as any[];
+    // A-V2 指标更新由独立高频循环（每 30 秒）负责，AI 决策周期只生成信号
 
-    // AI 后台运行，不阻塞 SA-Trend
-    const aiPromise = getMarketReport(strategyReport, positions, account, recentDecs, openTrades).catch(() => null);
+    // === 闪崩保护检查 ===
+    for (const pos of positions) {
+      if (pos.unrealizedPnlPct && pos.unrealizedPnlPct < -8) {
+        logger.warn(`闪崩: ${pos.symbol} ${pos.unrealizedPnlPct.toFixed(1)}%, 强平`);
+        try { await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "flash_crash"); }
+        catch (e: any) { logger.error(`闪崩平仓失败 ${pos.symbol}: ${e.message}`); }
+      }
+    }
+
+    // === AI 自驱信号 ===
+    const sfSignals: any[] = [];
+    for (const sym of CONFIG.symbols) {
+      try {
+        const ohlcv = ohlcvData.get(sym);
+        if (!ohlcv) continue;
+        const fr = tickers.get(sym)?.fundingRate || 0;
+        // AI 直接看 K 线做决策
+        const sig = await aiSignalDecision(sym, ohlcv, fr);
+        if (!sig) continue;
+        if (sig.action === "hold") { logger.info(`  💭 ${sym}: HOLD - ${sig.reason?.slice(0,100)}`); continue; }
+        logger.info(`  🤖 ${sym}: ${sig.action} (${sig.confidence}) - ${sig.reason}`);
+
+        sfSignals.push({
+          action: sig.action,
+          symbol: sym,
+          leverage: CONFIG.defaultLeverage || 5,
+          amountPercent: CONFIG.basePositionPct || 20,
+          confidence: sig.confidence === "HIGH" ? 8 : sig.confidence === "MEDIUM" ? 5 : 4,
+          reason: sig.reason + (fr > 0.0005 ? " (费率偏高)" : fr < -0.0005 ? " (费率偏低)" : ""),
+          sf_stopLoss: sig.stopLoss,
+          sf_takeProfit: sig.takeProfit,
+          sf_trailing: 0,
+          sf_regime: 2,
+        });
+      } catch (e: any) { logger.error(`  ❌ ${sym} AI决策异常: ${e.message}`); }
+    }
+
+    // === 4h A-V2 方向确认（仅检查方向一致，不要求完整信号） ===
+    for (let i = sfSignals.length - 1; i >= 0; i--) {
+      const sym = sfSignals[i].symbol;
+      try {
+        const d4 = await exchangeManager.getSuperFilterData4h(sym);
+        if (!d4 || d4.closes.length < 50) continue;
+        const av4 = aV2(d4.opens, d4.highs, d4.lows, d4.closes, 52);
+        const av4Up = av4.trend[av4.trend.length - 1] > 0;
+        if ((sfSignals[i].action === "buy" && !av4Up) || (sfSignals[i].action === "sell" && av4Up)) {
+          logger.info(`  4h方向不符: ${sym}, 移除`); sfSignals.splice(i, 1);
+        }
+      } catch { sfSignals.splice(i, 1); }
+    }
 
     const report: any = {
       analysis: [],
-      signals: directSigs,
+      signals: sfSignals,
       positions: [],
-      summary: "⏳ AI 分析中...",
-      saTrend: directSigs,
+      summary: "AI自驱策略",
+      saTrend: sfSignals,
       aiReview: [],
     };
-    logger.info(`📡 SA-Trend 推送: ${directSigs.length}信号`);
+    logger.info(`📡 AI信号: ${sfSignals.length}个`);
+    sfSignals.forEach((s: any) => logger.info(`  🤖 ${s.action} ${s.symbol} | ${s.reason}`));
+    if (sfSignals.length === 0) logger.info(`    本轮无AI信号`);
     setLatestReport(report);
     newCycle();
-
-    // === 等 AI 返回后再合并信号并开仓 ===
-    const aiResult = await aiPromise;
-    if (aiResult) {
-      report.summary = aiResult.summary || "AI 审核完成";
-      if (aiResult.positions) report.positions = aiResult.positions;
-      const aiOnly = (aiResult.signals || []).filter((s: any) => !directSigs.some((ds: any) => ds.symbol === s.symbol && ds.action === s.action));
-      report.signals = [...directSigs, ...aiOnly];
-      report.aiReview = report.signals.map((s: any) => ({ symbol: s.symbol, score: (s.confidence || 5) * 10, reason: s.reason || "" }));
-      setLatestReport(report);
-      logger.info(`📡 AI 审核完成: ${aiOnly.length}AI信号, ${(aiResult.positions||[]).length}平仓指令`);
-    } else {
-      logger.warn("AI 未返回，仅执行 SA-Trend 信号");
-    }
     
     // === AI close：执行平仓指令 ===
     const execLog: string[] = [];
+    const closedThisCycle = new Map<string, string>(); // symbol → side，记录本轮 AI 平掉的持仓方向
     if (report.positions && report.positions.length > 0) {
       for (const cmd of report.positions) {
         if (cmd.action !== "close") continue;
-        if (recentlyClosed.has(cmd.symbol)) continue;
+        if (recentlyClosed.has(cmd.symbol)) { logger.info(`[DBG] 平仓跳过: ${cmd.symbol} recentlyClosed=true`); continue; }
         const pos = positions.find(p => p.symbol === cmd.symbol);
-        if (!pos || !pos.qty || pos.qty <= 0) continue;
+        if (!pos || !pos.qty || pos.qty <= 0) { logger.info(`[DBG] 平仓跳过: ${cmd.symbol} posFound=${!!pos} qty=${pos?.qty}`); continue; }
         logger.warn(`🤖 AI 平仓: ${cmd.symbol} ${cmd.reason || ""}`);
         execLog.push(`AI平仓:${cmd.symbol}`);
+        closedThisCycle.set(cmd.symbol, pos.side);
         await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_close");
       }
     }
@@ -581,6 +710,10 @@ async function aiDecisionCycle() {
           for (const ft of flipTrades) actionable.push(ft);
           const isFlipOnly = newTrades.length === 0;
           if (isFlipOnly) authorizedFlip = true;
+        } else {
+          // 无翻转且不允许开新仓 → 清空所有待执行信号
+          actionable.length = 0;
+          execLog.push("风控禁止新仓，无翻转，本轮不开仓");
         }
       }
       if (actionable.length > 0 && (!risk.accountStop || authorizedFlip)) {
@@ -601,6 +734,13 @@ async function aiDecisionCycle() {
           const remain = dirInfo.blockUntil - aiCycleNumber;
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `方向阻断(${dirKey})剩余${remain}周期` });
           logger.info(`🚫 ${dirKey} 方向阻断中，剩余${remain}周期 (连败${dirInfo.count}次)`);
+          continue;
+        }
+        // 同一周期 AI 刚平仓的币种+方向不再开新仓，避免先平后开浪费手续费
+        const closedSide = closedThisCycle.get(trade.symbol);
+        if (closedSide === (trade.action === "buy" ? "long" : "short")) {
+          tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `本轮AI已平${closedSide}，不再同向开仓` });
+          logger.info(`⏸️ ${trade.symbol} 本轮AI已平${closedSide}，跳过同向信号`);
           continue;
         }
         if (existingSymbols.size >= CONFIG.maxPositions && !existingSymbols.has(trade.symbol)) { tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "持仓数已达上限" }); logger.info(`持仓数已达上限 ${CONFIG.maxPositions}`); break; }
@@ -639,7 +779,7 @@ async function aiDecisionCycle() {
         }
 
         // 行情质量：从策略引擎获取
-        const sa = strategyReport.analyses.find(a => a.symbol === trade.symbol);
+        const sa = null; /* strategyReport removed - SuperFilter handles filtering */
         const ticker = tickers.get(trade.symbol);
 
         // ===== 硬性信号过滤：AI复盘反复验证的亏损规律，代码级阻断 =====
@@ -654,7 +794,7 @@ async function aiDecisionCycle() {
           try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
           continue;
         }
-        const mq = sa?.sentiment?.marketQuality ?? 50;
+        const mq = 50;
         const mqMin = aggrScale(getIntercept("market_quality_min", 20), 10);
         ck(`MQ(${mq})`, mq >= mqMin);
         if (!CONFIG.bypassQualityFilters && mq < mqMin) {
@@ -682,34 +822,11 @@ async function aiDecisionCycle() {
           }
         }
 
-        // 入场质量硬阻断：方向对应的评分<35不开仓（原<20，收紧以过滤RSI超卖/B追空）
-        // AI评分≥70的高信心信号放宽EQ门槛至25，防止BB下轨在强趋势中误拦优质空单
-        if (sa?.entryQuality) {
-          const entryScore = trade.action === "buy"
-            ? sa.entryQuality.longEntryScore
-            : sa.entryQuality.shortEntryScore;
-          const eqMin = aggrScale(getIntercept("entry_quality_min", 35), 15);
-          const eqThreshold = aiScore >= 70 ? Math.min(eqMin, 25) : Math.min(eqMin, 35);
-          ck(`EQ(${trade.action})`, entryScore >= eqThreshold);
-          if (!CONFIG.bypassQualityFilters && entryScore < eqThreshold) {
-            const msg = `⏭️ ${trade.symbol} 入场质量${entryScore}<${eqThreshold}，${trade.action === "buy" ? "做多" : "做空"}时机差，跳过`;
-            tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `入场质量低(${entryScore})` });
-            logger.info(msg + ` | cascade: ${cascade.join(" ")}`);
-            execLog.push(msg);
-            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate, entryScore }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
-            continue;
-          } else if (entryScore < eqThreshold + 20) {
-            // 入场质量减半已关闭
-            logger.info(`   ${trade.symbol} 入场质量${entryScore}<${eqThreshold+20}（仓位缩放已关闭）`);
-          } else if (!CONFIG.bypassQualityFilters && entryScore < 20) {
-            const msg = `⏭️ ${trade.symbol} 入场质量评级 unfavorable，当前周期不开新仓`;
-            tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: "入场质量unfavorable" });
-            logger.info(msg);
-            execLog.push(msg);
-            try { insertDecision({ time: new Date().toISOString(), signal: trade.action, symbol: trade.symbol, action: trade.action, leverage: trade.leverage, amount: trade.amountPercent, reason: msg, confidence: trade.confidence, raw_response: JSON.stringify({ price: ticker?.price, rsi: rsiCache.get(trade.symbol), atrPct: atrCache.get(trade.symbol), fundingRate: ticker?.fundingRate }) }); db.prepare("UPDATE decisions SET status='skipped' WHERE id=last_insert_rowid()").run(); } catch {}
-            continue;
-          }
-        }
+        // 入场质量：SuperFilter 已内置过滤，直接放行
+        { const entryScore = 60;
+          // 入场质量直接通过（SuperFilter已过滤）
+        logger.info(`   ${trade.symbol} 入场质量通过`);
+        
 
         // 5. 基于历史胜率的仓位乘数：已关闭（Coordinator 凯利分配替代）
         // 胜率仓位缩放已关闭
@@ -786,10 +903,8 @@ async function aiDecisionCycle() {
         const indAdx1d = ind?.adx_1d ?? 30;
         const indAtrPct = ind?.atr_pct ?? (atrCache.get(trade.symbol) ?? 0.015) * 100;
         const indEmaDist = ind?.ema_dist_pct ?? 0;
-        const mqVal = sa?.sentiment?.marketQuality ?? 50;
-        const entryQVal = sa?.entryQuality
-          ? (trade.action === "buy" ? sa.entryQuality.longEntryScore : sa.entryQuality.shortEntryScore)
-          : 50;
+        const mqVal = 50;
+        const entryQVal = 60;
         const currentRegime = ind?.regime ?? "unknown";
         const optResult = applyOptRules(
           trade.symbol, side, aiSc,
@@ -863,13 +978,17 @@ async function aiDecisionCycle() {
           continue;
         }
 
-        const { success, fillPrice, error } = await executeFullOpen(trade.symbol, side, qty, Number(trade.leverage), Number(ticker.price), trade.reason, Number(decId));
+        const sl = trade.sf_stopLoss || 0;
+        const tp = trade.sf_takeProfit || 0;
+        const { success, fillPrice, error } = await executeFullOpen(trade.symbol, side, qty, Number(trade.leverage), Number(ticker.price), trade.reason, Number(decId), sl, tp);
         if (success) {
           tradeResults.push({ symbol: trade.symbol, status: "opened", side, qty, price: fillPrice, leverage: trade.leverage });
           existingSymbols.add(trade.symbol);
           openedThisSession.add(trade.symbol);
           openedThisCycle++;
           newPositionTime.set(trade.symbol, Date.now());
+          // 存储 A-V2 止盈止损价
+          if (trade.sf_stopLoss) { av2StopPrice.set(trade.symbol, trade.sf_stopLoss); av2TpPrice.set(trade.symbol, trade.sf_takeProfit); av2TrailingLine.set(trade.symbol, trade.sf_trailing); }
           // 回写 snapshot 的 trade_id
           const dbTradeRow = db.prepare("SELECT id FROM trades WHERE symbol = ? AND status = 'open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1").get(trade.symbol) as any;
           if (dbTradeRow) {
@@ -882,7 +1001,6 @@ async function aiDecisionCycle() {
           tradeResults.push({ symbol: trade.symbol, status: "skipped", reason: `开仓失败: ${error || "未知"}` });
         }
       }
-      }
     }
     report.execution = { log: execLog };
     report.newTrades = report.signals;
@@ -892,6 +1010,8 @@ async function aiDecisionCycle() {
 
     // 6. AI 交易复盘（每 6 周期≈30 分钟一次，独立定时器，不阻塞决策循环）
     scheduleReview(aiCycleNumber, tickers);
+      }
+    }
   } catch (e: any) {
     logger.error(`AI 决策异常: ${e.message}`);
   }

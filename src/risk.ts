@@ -3,10 +3,8 @@
  * 账户级 + 持仓级 + 分批止盈
  */
 import { CONFIG } from "./config";
-import { logger } from "./logger";
-import { exchangeManager, type AccountInfo } from "./exchanges";
+import { type AccountInfo } from "./exchanges";
 import { getTradesToday } from "./db";
-import { interceptParamsCache } from "./state";
 
 // 账户峰值追踪（用于回撤检查）
 let peakEquity = 0;
@@ -67,86 +65,4 @@ export function checkAccountRisk(account: AccountInfo, livePositions: number = 0
 
 
 
-// ========== 获取当前价格 ==========
-export async function getCurrentPrice(symbol: string): Promise<number> {
-  const ticker = await exchangeManager.getTicker(symbol);
-  return ticker?.price || 0;
-}
 
-// ========== 计算 PnL% (考虑杠杆) ==========
-export function calcPnlPct(entryPrice: number, currentPrice: number, side: "long" | "short", leverage: number): number {
-  if (entryPrice <= 0) return 0;
-  const pct = (currentPrice - entryPrice) / entryPrice * 100;
-  return pct * leverage * (side === "long" ? 1 : -1);
-}
-
-// ========== 止损检查（从峰值回撤） ==========
-export interface StopLossResult {
-  shouldClose: boolean;
-  level: string;
-  description: string;
-}
-
-/**
- * 检查浮盈保护：峰值浮盈>3%后回撤过半 → 平仓锁利
- * 防止浮盈转亏（分析显示两账号共26笔浮盈>0.8%最终亏损）
- */
-export function checkProfitProtect(
-  peakPnlPct: number,
-  currentPnlPct: number,
-  atrPct: number = 0,
-  leverage: number = 1,
-): { shouldClose: boolean; reason: string } | null {
-  if (peakPnlPct < 3 || currentPnlPct <= 0 || peakPnlPct <= 0) return null;
-
-  // 动态比例止盈：峰值越高锁得越紧（同 nof1.ai 规则）
-  // 比例 = min(0.7, 0.4 + 峰值/100)，+6%锁46%，+20%锁60%，+30%锁70%
-  const trailRatio = Math.min(0.7, 0.4 + peakPnlPct / 100);
-  const line = Math.max(peakPnlPct * trailRatio, 1.5);
-
-  if (currentPnlPct < line) {
-    return {
-      shouldClose: true,
-      reason: `动态止盈: 峰值${peakPnlPct.toFixed(1)}%,比例${(trailRatio*100).toFixed(0)}%,跌破${line.toFixed(1)}%→平仓`,
-    };
-  }
-  return null;
-}
-
-/**
- * 检查是否触发止损（ATR 动态止损，分行情：趋势中 4×，震荡中 2×）
- * 止损触发价格波动 = atrMult × ATR%，乘以杠杆后得到 PnL% 阈值
- * 关键修正：之前没有乘以杠杆，导致高杠杆下止损距离过短被噪音震出
- */
-export function checkStopLoss(
-  currentPnlPct: number,
-  peakPnlPct: number,
-  leverage: number = 5,
-  atrPct: number = 0.015,
-  atrMult: number = 2,
-): StopLossResult | null {
-  const maxSl = (interceptParamsCache.get("max_stop_loss_pct") ?? 500) / 100;
-  const stopThreshold = Math.max(2, Math.min(maxSl, atrPct * 100 * atrMult * leverage));
-  if (currentPnlPct <= -stopThreshold) {
-    return { shouldClose: true, level: "stop_loss", description: `亏损${currentPnlPct.toFixed(1)}% 触发止损 (ATR ${(atrPct*100).toFixed(2)}% × ${atrMult} × ${leverage}x = ${stopThreshold.toFixed(1)}%)` };
-  }
-  return null;
-}
-
-/**
- * 执行止损平仓（从交易所直接平）
- */
-export async function executeStopLoss(
-  closeFn: () => Promise<void>,
-  symbol: string,
-  qty: number
-): Promise<boolean> {
-  try {
-    await closeFn();
-    logger.warn(`🛑 止损平仓: ${symbol} ${qty}张`);
-    return true;
-  } catch (e: any) {
-    logger.error(`止损平仓失败 ${symbol}: ${e.message}`);
-    return false;
-  }
-}

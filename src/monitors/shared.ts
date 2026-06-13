@@ -41,3 +41,11 @@ export function clearSymbolState(symbol: string) {
   peakPnlMap.delete(symbol);
   partialCloseMap.delete(symbol);
 }
+
+
+/** A-V2止损价（SuperFilter策略用, price→side→stopPrice） */
+export const av2StopPrice = new Map<string, number>();
+/** A-V2止盈价 */
+export const av2TpPrice = new Map<string, number>();
+/** A-V2跟即线 */
+export const av2TrailingLine = new Map<string, number>();

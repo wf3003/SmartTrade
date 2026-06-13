@@ -11,7 +11,8 @@ import { logger } from "../logger";
 import { getOpenPositionPeakPnlMap } from "../db";
 import { peakPnlMap } from "./shared";
 import { startStopLossMonitor, stopStopLossMonitor } from "./stopLossMonitor";
-import { startProfitMonitor, stopProfitMonitor } from "./profitMonitor";
+// 止盈止损统一由 A-V2 处理（stopLossMonitor 检查 av2StopPrice / av2TpPrice）
+// profitMonitor 已废弃，旧版 PnL% 浮盈保护不再使用
 
 /** 从 DB 恢复上次运行时的峰值 PnL */
 export function restorePeakPnlFromDb() {
@@ -29,10 +30,10 @@ export function restorePeakPnlFromDb() {
 export function startAllMonitors() {
   restorePeakPnlFromDb();
   startStopLossMonitor();
-  startProfitMonitor();
+  // 止盈止损由 A-V2 统一管理
 }
 
 export function stopAllMonitors() {
   stopStopLossMonitor();
-  stopProfitMonitor();
+  // stopProfitMonitor 已废弃
 }

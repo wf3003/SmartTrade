@@ -236,6 +236,18 @@ class ExchangeManager {
     }));
     return results;
   }
+  /** 返回指定币种 OHLCV 数组（供 SuperFilter 使用） */
+  async getSuperFilterData(symbol: string, limit = 200, tf = "3m"): Promise<{ opens: number[]; highs: number[]; lows: number[]; closes: number[] } | null> {
+    const data = await this.getOHLCV(symbol, tf, limit);
+    if (!data || !data.candles) return null;
+    const c = data.candles;
+    return { opens: c.map((x: any) => x.open), highs: c.map((x: any) => x.high), lows: c.map((x: any) => x.low), closes: c.map((x: any) => x.close) };
+  }
+
+  /** 返回 4h OHLCV 用于长周期信号确认 */
+  async getSuperFilterData4h(symbol: string): Promise<{ opens: number[]; highs: number[]; lows: number[]; closes: number[] } | null> {
+    return this.getSuperFilterData(symbol, 50, "4h");
+  }
 
 
   /**
@@ -264,8 +276,7 @@ class ExchangeManager {
     const frames = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
     const results: Record<string, any> = {};
     for (const tf of frames) {
-      // 统一拉 60 根，保证各周期都能跑回测(需≥40根)
-      const limit = 60;
+      const limit = tf === "5m" ? 200 : tf === "15m" ? 100 : 60; // 5min 200根供SuperFilter
       const data = await this.getOHLCV(symbol, tf, limit);
       if (data) results[tf] = data.candles;
     }
@@ -353,6 +364,7 @@ class ExchangeManager {
     // 设置杠杆 — OKX 需要 mgnMode + posSide 才生效
     if (typeof client.setLeverage === "function") {
       let setOK = false;
+      let setMethod = "";
       // 方式一：完整参数
       try {
         await client.setLeverage(leverage, swapSymbol, {
@@ -360,18 +372,20 @@ class ExchangeManager {
           posSide: side === "long" ? "long" : "short",
         });
         setOK = true;
+        setMethod = "mgnMode+posSide";
       } catch {}
       // 方式二：不带 posSide
       if (!setOK) {
-        try { await client.setLeverage(leverage, swapSymbol, { mgnMode: "isolated" }); setOK = true; } catch {}
+        try { await client.setLeverage(leverage, swapSymbol, { mgnMode: "isolated" }); setOK = true; setMethod = "mgnMode"; } catch {}
       }
       // 方式三：纯默认
       if (!setOK) {
-        try { await client.setLeverage(leverage, swapSymbol); setOK = true; } catch {}
+        try { await client.setLeverage(leverage, swapSymbol); setOK = true; setMethod = "default"; } catch {}
       }
       if (!setOK) {
-        logger.warn(`⚠️ setLeverage 全失败: ${symbol} → ${leverage}x 未生效，使用交易所当前杠杆`);
+        throw new Error(`setLeverage 全失败: ${symbol} → ${leverage}x 无法设置，禁止以错误杠杆开仓`);
       }
+      logger.info(`🔧 ${symbol} 杠杆已设置: ${leverage}x (${setMethod})`);
     }
     // 设置逐仓模式 — 依赖已有的持仓模式，不自作主张切换
     if (typeof (client as any).setMarginMode === "function") {

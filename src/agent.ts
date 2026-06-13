@@ -150,6 +150,10 @@ ${scoringAdvice ? `\n## 评分校准\n${scoringAdvice}\n` : ""}
 - 无风险留空
 ### 持仓
 - 趋势结构已破坏才close
+### 对称决策
+- 趋势有对称性：大趋势偏空时，平掉多仓后应同步评估是否有做空机会
+- 不要只否决不做 — 否决一个方向的信号/平掉对应方向的持仓后，检查反向是否存在值得开仓的入场点
+- 多空双向都要考虑：偏空的行情优先输出 sell 信号，偏多的行情优先输出 buy 信号
 
 ## JSON 格式
 {
@@ -248,7 +252,9 @@ export async function getMarketReport(
         messages: [{ role: "system", content: "你只输出定性判断，不出数字参数。只输出JSON。" }, { role: "user", content: prompt }],
       });
       raw = resp.choices[0]?.message?.content || "";
-      logger.info(`AI主席(${raw.length}字符): ${raw.slice(0, 100)}...`);
+        // 完整输出 AI 主席原始响应到日志（DEBUG 级别），INFO 输出分析摘要
+  logger.debug(`AI主席原始(${raw.length}字符): ${raw}`);
+  logger.info(`AI主席(${raw.length}字符): ${raw.slice(0, 100)}...`);
       const parsed = parseReport(raw);
       if (parsed && parsed.requestDetail?.length) {
         const supp = buildSupplementalDetail(strategyReport, parsed.requestDetail.slice(0, 3));
@@ -271,6 +277,20 @@ export async function getMarketReport(
     } catch { return null; }
   }
   const report = parseReport(raw);
-  if (report) logger.info(`📊 AI主席: ${report.signals.filter(s=>s.action!=='hold').length}信号, 平仓${report.positions.filter(p=>p.action==='close').length}个`);
+  if (report) {
+  logger.info(`📊 AI主席: ${report.signals.filter(s=>s.action!=='hold').length}信号, 平仓${report.positions.filter(p=>p.action==='close').length}个`);
+  // 逐币分析日志
+  for (const a of report.analysis) {
+    logger.info(`[AI分析] ${a.symbol}: 趋势=${a.trend} 强度=${a.strength} 评分=${a.score} | ${a.summary}`);
+  }
+  // 平仓指令明细
+  for (const p of report.positions) {
+    if (p.action === 'close') logger.info(`[AI平仓指令] ${p.symbol}: ${p.reason}`);
+  }
+  // 信号明细
+  for (const s of report.signals) {
+    if (s.action !== 'hold') logger.info(`[AI信号] ${s.symbol} ${s.action}(${s.direction}) conf=${s.confidence} | ${s.reason}`);
+  }
+}
   return report;
 }
