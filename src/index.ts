@@ -46,10 +46,6 @@ import { startAllMonitors, stopAllMonitors } from "./monitors/index";
 import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened, av2StopPrice, av2TpPrice, av2TrailingLine } from "./monitors/shared";
 import { executeFullClose, directionLoss, snapshotIdMap, openedThisSession, setAiCycleNumber, aiCycleNumber, DIRECTION_BLOCK_CYCLES } from "./close-executor";
 
-// 持仓的AI止损止盈价（每2秒监控检查，不挂条件单防渣仓）
-const slMap = new Map<string, number>();
-const tpMap = new Map<string, number>();
-
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓（模拟盘限频宽松，高频捕捉峰值）
 const DECISION_INTERVAL = 15 * 60_000; // 每 15 分钟（匹配15mK线）
 const MINIMUM_ACCOUNT_STOP_USDT = CONFIG.accountStopLossUsdt;
@@ -231,9 +227,13 @@ async function executeFullOpen(
       "SELECT id, entry_qty, entry_price, leverage FROM trades WHERE symbol=? AND side=? AND status='open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1"
     ).get(symbol, side) as any;
 
-    // 保存止盈止损价到内存（给监控循环用，不走条件单避免残留）
-    if (sl) slMap.set(symbol, sl); else slMap.delete(symbol);
-    if (tp) tpMap.set(symbol, tp); else tpMap.delete(symbol);
+    // 设置 AI 止损止盈单
+    if (sl || tp) {
+      try {
+        if (sl) exchangeManager.openPosition(symbol, side === "long" ? "sell" : "buy", 0, leverage, { reduceOnly: true, triggerPrice: sl, triggerType: "last" }).catch(() => {});
+        if (tp) exchangeManager.openPosition(symbol, side === "long" ? "sell" : "buy", 0, leverage, { reduceOnly: true, triggerPrice: tp, triggerType: "last" }).catch(() => {});
+      } catch {}
+    }
 
     if (existingTrade) {
       const safeLev = Math.min(leverage, existingTrade.leverage || leverage);
@@ -572,21 +572,6 @@ async function aiDecisionCycle() {
     logger.info(`📡 K线:${ohlcvData.size}/${CONFIG.symbols.length}币种 行情:${tickers.size}/${CONFIG.symbols.length}币种`);
     
     // A-V2 指标更新由独立高频循环（每 30 秒）负责，AI 决策周期只生成信号
-
-    // === AI止损止盈检查（代码级保护，不走条件单防渣仓）===
-    for (const pos of positions) {
-      const sl = slMap.get(pos.symbol);
-      const tp = tpMap.get(pos.symbol);
-      const px = pos.entryPrice || 0;
-      if (sl && px > 0 && ((pos.side === "long" && px <= sl) || (pos.side === "short" && px >= sl))) {
-        logger.warn(`止损: ${pos.symbol} 触发$${sl}`);
-        try { await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_sl"); slMap.delete(pos.symbol); tpMap.delete(pos.symbol); } catch {}
-      }
-      if (tp && px > 0 && ((pos.side === "long" && px >= tp) || (pos.side === "short" && px <= tp))) {
-        logger.warn(`止盈: ${pos.symbol} 触发$${tp}`);
-        try { await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_tp"); slMap.delete(pos.symbol); tpMap.delete(pos.symbol); } catch {}
-      }
-    }
 
     // === 闪崩保护检查 ===
     for (const pos of positions) {
