@@ -46,6 +46,8 @@ export async function executeFullClose(
   } catch {}
 
   const closeResult = await exchangeManager.closePosition(symbol, side, qty);
+  // 清扫残余：OKX市价单可能留残渣
+  try { let r=3; while(r-->0){ await new Promise(p=>setTimeout(p,500)); const p=(await exchangeManager.getPositions()).find(x=>x.symbol===symbol); if(!p||!p.qty||p.qty<=0)break; logger.warn("  🧹 清扫:"+symbol+" 剩"+p.qty+"张"); await exchangeManager.closePosition(symbol,side,p.qty); } } catch(e:any){logger.warn("  🧹 清扫异常:"+e.message);}
   const dbTrade = getLatestOpenTrades().get(symbol);
   const exitPrice = closeResult.avgPrice || 0;
 
