@@ -1,50 +1,18 @@
-/**
- * PM2 生态配置文件
- *
- * 使用方式：
- *   pm2 start ecosystem.config.js              # 启动（不带 Web）
- *   pm2 start ecosystem.config.js --env web     # 启动（带 Web 仪表盘）
- *   pm2 restart smarttrade                      # 重启
- *   pm2 logs smarttrade                         # 查看日志
- *   pm2 save                                    # 保存进程列表
- */
-export default {
+module.exports = {
   apps: [
     {
       name: "smarttrade",
-      script: "npx",
-      args: "tsx --env-file=.env src/index.ts",
-      cwd: ".",
-      env: {
-        NODE_ENV: "production",
-      },
-      env_web: {
-        NODE_ENV: "production",
-        args: "tsx --env-file=.env src/index.ts --web",
-      },
+      script: "node_modules/.bin/tsx",
+      args: "--env-file=.env src/index.ts",
+      cwd: "/home/rose/SmartTrade2",
+      env: { NODE_ENV: "production" },
       error_file: "data/logs/pm2-error.log",
       out_file: "data/logs/pm2-out.log",
       merge_logs: true,
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       autorestart: true,
-      max_restarts: 5,
-      watch: false,
-      time: true,
-    },
-    {
-      name: "smarttrade2",
-      script: "npx",
-      args: "tsx --env-file=.env src/index.ts",
-      cwd: ".",
-      env: {
-        NODE_ENV: "production",
-      },
-      error_file: "data/logs/pm2-error-2.log",
-      out_file: "data/logs/pm2-out-2.log",
-      merge_logs: true,
-      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
-      autorestart: true,
-      max_restarts: 5,
+      max_restarts: 10,
+      restart_delay: 5000,
       watch: false,
       time: true,
     },
