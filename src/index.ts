@@ -9,7 +9,7 @@
 import { CONFIG } from "./config";
 import { logger } from "./logger";
 import { exchangeManager } from "./exchanges";
-import { superFilter, aV2 } from "./indicators/superfilter";
+
 import { aiSignalDecision } from "./strategies/ai-driven";
 import { runStrategyEngine } from "./strategies/index";
 import { getMarketReport, signalToTrade } from "./agent";
@@ -30,7 +30,6 @@ import {
   closeTrade,
   insertPartialCloseRecord,
   getOpenPositionPeakPnlMap,
-  updatePeakPnlInDb,
   getTradesHistory,
   insertAiReview,
   insertIndicatorSnapshot,
@@ -43,11 +42,8 @@ import {
 } from "./db";
 import { runOptimizer, evaluateUnjudgedDecisions, discoverComboPatterns, detectRuleDrift, detectRegimeShift } from "./auto-optimizer";
 import { startAllMonitors, stopAllMonitors } from "./monitors/index";
-import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened, av2StopPrice, av2TpPrice, av2TrailingLine } from "./monitors/shared";
+import { peakPnlMap, newPositionTime, recentlyClosed, recentlyOpened } from "./monitors/shared";
 import { executeFullClose, directionLoss, snapshotIdMap, openedThisSession, setAiCycleNumber, aiCycleNumber, DIRECTION_BLOCK_CYCLES } from "./close-executor";
-
-// AI信号的止损止盈价（每2秒监控检查）
-// AI止损价（在av2StopPrice中存储, 由监控循环每2秒检查）
 
 const MONITOR_INTERVAL = 2_000;  // 每 2 秒检查持仓（模拟盘限频宽松，高频捕捉峰值）
 const DECISION_INTERVAL = 15 * 60_000; // 每 15 分钟（匹配15mK线）
@@ -315,83 +311,13 @@ async function main() {
     logger.info(`📋 恢复峰值: ${symbol} peakPnl=${data.peakPnl.toFixed(1)}%`);
   }
 
-  // AI自驱模式下关闭旧SuperFilter止损监控器（止损由AI信号决定）
-  // startAllMonitors(); 已禁用
+  // 启动独立止盈止损监控器（每2秒检查）
+  startAllMonitors();
   // DB 同步循环（补建/关闭/修复记录）
   (async function syncLoop() {
     while (true) {
       try { await syncPositionsWithDb(); } catch {}
       await new Promise(r => setTimeout(r, MONITOR_INTERVAL));
-    }
-  })();
-
-  // A-V2 指标更新循环（每 30 秒，独立于 AI 决策周期，让止损止盈反应更快）
-  (async function av2UpdateLoop() {
-    // 等交易所连接稳定
-    await new Promise(r => setTimeout(r, 3000));
-    const AV2_UPDATE_INTERVAL = 30_000;
-    while (true) {
-      try {
-        const positions = await exchangeManager.getPositions();
-        if (positions.length > 0) {
-          for (const pos of positions) {
-            const sym = pos.symbol;
-            try {
-              const sfData = await exchangeManager.getSuperFilterData(sym, 60);
-              if (!sfData || sfData.closes.length < 50) continue;
-              const last = sfData.closes.length - 1;
-              const av = aV2(sfData.opens, sfData.highs, sfData.lows, sfData.closes);
-              if (isNaN(av.maLow[last]) || isNaN(av.maHigh[last])) continue;
-
-              // 初始化缺失的止损价（进程重启后恢复用）
-              if (!av2StopPrice.has(sym) && pos.entryPrice > 0) {
-                if (pos.side === "long") {
-                  av2StopPrice.set(sym, av.maLow[last]);
-                  av2TpPrice.set(sym, av.maLow[last] + 2 * (pos.entryPrice - av.maLow[last]));
-                  av2TrailingLine.set(sym, av.maClose[last]);
-                } else {
-                  av2StopPrice.set(sym, av.maHigh[last]);
-                  av2TpPrice.set(sym, av.maHigh[last] - 2 * (av.maHigh[last] - pos.entryPrice));
-                  av2TrailingLine.set(sym, av.maClose[last]);
-                }
-                continue;
-              }
-
-              // 止损只往有利方向移动
-              if (pos.side === "long") {
-                const newStop = av.maLow[last];
-                const oldStop = av2StopPrice.get(sym);
-                if (oldStop !== undefined && newStop > oldStop) av2StopPrice.set(sym, newStop);
-
-                const newClose = av.maClose[last];
-                const oldTrail = av2TrailingLine.get(sym);
-                if (oldTrail !== undefined && newClose > oldTrail) av2TrailingLine.set(sym, newClose);
-
-                const oldTp = av2TpPrice.get(sym);
-                if (oldTp !== undefined) {
-                  const newTp = av2StopPrice.get(sym)! + (newClose - av.maLow[last]) * 2;
-                  if (newTp > oldTp) av2TpPrice.set(sym, newTp);
-                }
-              } else {
-                const newStop = av.maHigh[last];
-                const oldStop = av2StopPrice.get(sym);
-                if (oldStop !== undefined && newStop < oldStop) av2StopPrice.set(sym, newStop);
-
-                const newClose = av.maClose[last];
-                const oldTrail = av2TrailingLine.get(sym);
-                if (oldTrail !== undefined && newClose < oldTrail) av2TrailingLine.set(sym, newClose);
-
-                const oldTp = av2TpPrice.get(sym);
-                if (oldTp !== undefined) {
-                  const newTp = av2StopPrice.get(sym)! - 2 * (av.maHigh[last] - newClose);
-                  if (newTp < oldTp) av2TpPrice.set(sym, newTp);
-                }
-              }
-            } catch {}
-          }
-        }
-      } catch {}
-      await new Promise(r => setTimeout(r, AV2_UPDATE_INTERVAL));
     }
   })();
 
@@ -572,47 +498,7 @@ async function aiDecisionCycle() {
     }
     logger.info(`📡 K线:${ohlcvData.size}/${symbols.length}币种 行情:${tickers.size}/${symbols.length}币种`);
     
-    // A-V2 指标更新由独立高频循环（每 30 秒）负责，AI 决策周期只生成信号
-
-    // === AI止损止盈检查 ===
-    for (const pos of positions) {
-      const aiSl = av2StopPrice.get(pos.symbol);
-      const price = pos.entryPrice > 0 ? (pos.side === "long"
-        ? pos.entryPrice * (1 + (pos.unrealizedPnlPct || 0) / 100 / (pos.leverage || 1))
-        : pos.entryPrice * (1 - (pos.unrealizedPnlPct || 0) / 100 / (pos.leverage || 1))) : 0;
-      if (aiSl && price > 0) {
-        if ((pos.side === "long" && price <= aiSl) || (pos.side === "short" && price >= aiSl)) {
-          logger.warn(`📉 AI止损: ${pos.symbol} $${price.toFixed(2)} ≤ $${aiSl.toFixed(2)}`);
-          try { await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "ai_sl");
-            av2StopPrice.delete(pos.symbol); av2TpPrice.delete(pos.symbol); } catch {}
-          continue;
-        }
-      }
-      // 右侧止盈：峰值 >5% 后回撤5% 即平
-      const peakVal = peakPnlMap.get(pos.symbol) ?? 0;
-      if ((pos.unrealizedPnlPct || 0) > peakVal) {
-        peakPnlMap.set(pos.symbol, pos.unrealizedPnlPct || 0);
-        try {
-          const dbTrade = getLatestOpenTrades().get(pos.symbol);
-          if (dbTrade?.id) updatePeakPnlInDb(dbTrade.id, pos.unrealizedPnlPct || 0);
-        } catch {}
-      }
-      if (peakVal >= 5 && (pos.unrealizedPnlPct || 0) < peakVal - 5 && pos.side) {
-        logger.warn(`📈 右侧止盈: ${pos.symbol} 峰值${peakVal.toFixed(1)}%→${(pos.unrealizedPnlPct||0).toFixed(1)}%`);
-        try { await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "peak_tp");
-          av2StopPrice.delete(pos.symbol); av2TpPrice.delete(pos.symbol); } catch {}
-        continue;
-      }
-    }
-
-    // === 闪崩保护检查 ===
-    for (const pos of positions) {
-      if (pos.unrealizedPnlPct && pos.unrealizedPnlPct < -8) {
-        logger.warn(`闪崩: ${pos.symbol} ${pos.unrealizedPnlPct.toFixed(1)}%, 强平`);
-        try { await executeFullClose(pos.symbol, pos.side, pos.qty, pos.unrealizedPnl || 0, pos.unrealizedPnlPct || 0, "flash_crash"); }
-        catch (e: any) { logger.error(`闪崩平仓失败 ${pos.symbol}: ${e.message}`); }
-      }
-    }
+    // 止盈止损由独立监控器（每2秒）统一管理：止损 -5%，移动止盈
 
     // === AI 自驱信号 ===
     const sfSignals: any[] = [];
@@ -654,6 +540,8 @@ async function aiDecisionCycle() {
           sf_takeProfit: sig.takeProfit,
           sf_trailing: 0,
           sf_regime: 2,
+          regime: (() => { const ic = indicatorCache.get(sym); return ic?.regime || "—"; })(),
+          regime1h: (() => { const ic = indicatorCache.get(sym); if (!ic) return "—"; const a=ic.adx_1h; const dir=ic.ema_dist_pct>=0?"多":"空"; return a>=40?`强趋势${dir}`:a>=25?`弱趋势${dir}`:`震荡偏${dir}`; })(),
         });
       } catch (e: any) { logger.error(`  ❌ ${sym} AI决策异常: ${e.message}`); }
     }
@@ -1019,8 +907,6 @@ async function aiDecisionCycle() {
           openedThisSession.add(trade.symbol);
           openedThisCycle++;
           newPositionTime.set(trade.symbol, Date.now());
-          // 存储 A-V2 止盈止损价
-          if (trade.sf_stopLoss) { av2StopPrice.set(trade.symbol, trade.sf_stopLoss); av2TpPrice.set(trade.symbol, trade.sf_takeProfit); av2TrailingLine.set(trade.symbol, trade.sf_trailing); }
           // 回写 snapshot 的 trade_id
           const dbTradeRow = db.prepare("SELECT id FROM trades WHERE symbol = ? AND status = 'open' AND (close_type IS NULL OR close_type NOT IN ('partial_open','partial_close')) ORDER BY id DESC LIMIT 1").get(trade.symbol) as any;
           if (dbTradeRow) {

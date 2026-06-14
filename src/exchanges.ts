@@ -566,8 +566,8 @@ class ExchangeManager {
     if (!found) throw new Error(`无可用的合约交易所: ${symbol}`);
     const { client, swapSymbol } = found;
     const orderSide = side === "long" ? "sell" : "buy";
-    const params: any = { reduceOnly: true };
-    // 不指定 tdMode，让 OKX 自动匹配逐仓/全仓；51000 时重试带上 posSide
+    const params: any = { reduceOnly: true, tdMode: "isolated" };
+    // OKX 必须匹配持仓的 tdMode，否则会报 51169（仓位不存在）
     try {
       const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
       let avgPrice = order?.price || order?.average || 0;
@@ -611,8 +611,61 @@ class ExchangeManager {
         if (!avgPrice && order?.id) { try { const f = await (client as any).fetchOrder(order.id, swapSymbol); avgPrice = f?.average || f?.price || avgPrice; } catch {} }
         return { order, avgPrice, fee: order?.fee?.cost || 0 };
       }
+      // 51169: 仓位不存在 — 可能是 hedge mode 需要 posSide，不要直接放弃
       if (msg.includes("51169") || msg.includes("no position") || msg.includes("don't have any positions")) {
-        logger.warn(`closePosition: ${symbol} 仓位已不存在（可能已被其他方式平仓）`);
+        if (!params.posSide) {
+          // 尝试一：补上 posSide 重试（hedge mode 必须指定方向）
+          params.posSide = side;
+          logger.warn(`🔧 ${symbol} 51169 尝试补posSide:${side} 重试`);
+          try {
+            const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
+            let avgPrice = order?.price || order?.average || 0;
+            if (!avgPrice && order?.id) { try { const f = await (client as any).fetchOrder(order.id, swapSymbol); avgPrice = f?.average || f?.price || avgPrice; } catch {} }
+            return { order, avgPrice, fee: order?.fee?.cost || 0 };
+          } catch (e2: any) {
+            const msg2 = e2.message || String(e2);
+            logger.warn(`🔧 ${symbol} 补posSide仍失败: ${msg2.slice(0,100)}`);
+          }
+          // 加上 posSide 仍失败 → 摘掉 posSide 再试一次
+          delete params.posSide;
+          logger.warn(`🔧 ${symbol} 摘掉posSide 最后一次重试`);
+          try {
+            const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
+            let avgPrice = order?.price || order?.average || 0;
+            if (!avgPrice && order?.id) { try { const f = await (client as any).fetchOrder(order.id, swapSymbol); avgPrice = f?.average || f?.price || avgPrice; } catch {} }
+            return { order, avgPrice, fee: order?.fee?.cost || 0 };
+          } catch (e3: any) {
+            const msg3 = e3.message || String(e3);
+            logger.warn(`🔧 ${symbol} 摘掉posSide仍失败: ${msg3.slice(0,100)}`);
+          }
+        } else {
+          // 已有 posSide 还 51169 → 摘掉重试
+          delete params.posSide;
+          logger.warn(`🔧 ${symbol} 51169 摘掉posSide 重试`);
+          try {
+            const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
+            let avgPrice = order?.price || order?.average || 0;
+            if (!avgPrice && order?.id) { try { const f = await (client as any).fetchOrder(order.id, swapSymbol); avgPrice = f?.average || f?.price || avgPrice; } catch {} }
+            return { order, avgPrice, fee: order?.fee?.cost || 0 };
+          } catch (e2: any) {
+            const msg2 = e2.message || String(e2);
+            logger.warn(`🔧 ${symbol} 摘掉posSide仍失败: ${msg2.slice(0,100)}`);
+          }
+          // 再补上 posSide 最后一次尝试
+          params.posSide = side;
+          logger.warn(`🔧 ${symbol} 补回posSide:${side} 最后一次重试`);
+          try {
+            const order = await client.createOrder(swapSymbol, "market", orderSide, qty, undefined, params);
+            let avgPrice = order?.price || order?.average || 0;
+            if (!avgPrice && order?.id) { try { const f = await (client as any).fetchOrder(order.id, swapSymbol); avgPrice = f?.average || f?.price || avgPrice; } catch {} }
+            return { order, avgPrice, fee: order?.fee?.cost || 0 };
+          } catch (e3: any) {
+            const msg3 = e3.message || String(e3);
+            logger.warn(`🔧 ${symbol} 补回posSide仍失败: ${msg3.slice(0,100)}`);
+          }
+        }
+        // 所有重试均失败，此时才确认仓位真的不存在
+        logger.warn(`closePosition: ${symbol} 仓位已不存在（所有重试均失败）`);
         return { order: null, avgPrice: 0, fee: 0 };
       }
       throw e;

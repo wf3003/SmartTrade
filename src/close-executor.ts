@@ -34,8 +34,7 @@ export async function executeFullClose(
   pnlPct: number,
   closeType: string,
 ): Promise<{ closeResult: any; actualPnl: number; actualPnlPct: number }> {
-  // 抢先标记为"关闭中"，防止监控器和AI循环同时平同一仓位
-  recentlyClosed.add(symbol);
+  // 不在此时标记 recentlyClosed —— 平仓可能失败，失败后仍需监控器/AI循环可重试
   clearTrailingStop(symbol);
   // 平仓前重新拉一次持仓，拿到最新快照盈亏
   let snapPnl = pnl, snapPnlPct = pnlPct;
@@ -46,6 +45,15 @@ export async function executeFullClose(
   } catch {}
 
   const closeResult = await exchangeManager.closePosition(symbol, side, qty);
+
+  // 验证平仓是否真正在交易所执行（防止 exit_price=0 假平仓写库）
+  if (!closeResult.order || closeResult.avgPrice <= 0) {
+    logger.error(`❌ ${symbol} 平仓失败: 交易所未执行 (order=${!!closeResult.order}, avgPrice=${closeResult.avgPrice}). 仓位仍在交易所, DB不标记关闭.`);
+    throw new Error(`${symbol} 平仓失败: 交易所未创建订单或成交价为0，仓位仍存留在交易所`);
+  }
+
+  // 平仓已在交易所执行成功，标记为关闭中防止监控器/AI循环重复平仓
+  recentlyClosed.add(symbol);
   // 清扫残余：OKX市价单可能留残渣
   try { let r=3; while(r-->0){ await new Promise(p=>setTimeout(p,500)); const p=(await exchangeManager.getPositions()).find(x=>x.symbol===symbol); if(!p||!p.qty||p.qty<=0)break; logger.warn("  🧹 清扫:"+symbol+" 剩"+p.qty+"张"); await exchangeManager.closePosition(symbol,side,p.qty); } } catch(e:any){logger.warn("  🧹 清扫异常:"+e.message);}
   const dbTrade = getLatestOpenTrades().get(symbol);
