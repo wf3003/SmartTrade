@@ -4,7 +4,7 @@ module.exports = {
       name: "smarttrade",
       script: "node_modules/.bin/tsx",
       args: "--env-file=.env src/index.ts",
-      cwd: "/home/rose/SmartTrade2",
+      cwd: "/path/to/SmartTrade2",
       env: { NODE_ENV: "production" },
       error_file: "data/logs/pm2-error.log",
       out_file: "data/logs/pm2-out.log",
