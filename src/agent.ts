@@ -57,8 +57,8 @@ export function signalToTrade(
   currentRegime: string,
 ): { leverage: number; amountPercent: number } | null {
   if (signal.action === "hold") return null;
-  // 固定 10x 杠杆 + 20% 总资金（通过仓位比例控制），不再按置信度动态调整
-  return { leverage: 10, amountPercent: 20 };
+  // 使用 CONFIG 默认值，不再硬编码
+  return { leverage: CONFIG.defaultLeverage, amountPercent: CONFIG.basePositionPct };
 }
 
 export function buildStrategyPrompt(
